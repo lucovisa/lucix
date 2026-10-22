@@ -53,7 +53,7 @@ jobs:
       - name: Собираем ISO
         env:
           LUCIX_VERSION: ${{ steps.ver.outputs.version }}
-        run: sudo -E ./build/build-iso.sh
+        run: sudo -E bash ./build/build-iso.sh
 
       - name: Проверяем размер (лимит файла в релизе — 2 ГБ)
         run: |
