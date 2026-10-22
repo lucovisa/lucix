@@ -1,0 +1,87 @@
+name: Build Lucix ISO
+
+on:
+  # Ручной запуск: вкладка Actions -> Build Lucix ISO -> Run workflow
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия (например 2026.10.22-alpha1). Пусто = дата сегодняшнего дня + -dev"
+        required: false
+        default: ""
+  # Релиз: создаёшь тег вида v2026.10.22-alpha1 -> ISO уйдёт в GitHub Releases
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Определяем версию
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            v="$INPUT_VERSION"
+          else
+            v="$(date -u +%Y.%m.%d)-dev"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Версия сборки: $v"
+
+      - name: Освобождаем место на диске
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h / /mnt
+
+      - name: Ставим инструменты сборки
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap squashfs-tools xorriso \
+            grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools ubuntu-keyring
+
+      - name: Собираем ISO
+        env:
+          LUCIX_VERSION: ${{ steps.ver.outputs.version }}
+        run: sudo -E ./build/build-iso.sh
+
+      - name: Проверяем размер (лимит файла в релизе — 2 ГБ)
+        run: |
+          ls -lh out/
+          size=$(stat -c %s out/*.iso)
+          echo "Размер ISO: $((size / 1024 / 1024)) МБ"
+          if (( size > 2000 * 1024 * 1024 )); then
+            echo "::error::ISO больше 2 ГБ, в релиз не влезет"
+            exit 1
+          fi
+
+      - name: Сохраняем ISO как артефакт сборки
+        uses: actions/upload-artifact@v4
+        with:
+          name: lucix-iso-${{ steps.ver.outputs.version }}
+          path: |
+            out/*.iso
+            out/*.sha256
+            out/skipped-packages.txt
+          compression-level: 0
+          retention-days: 14
+
+      - name: Публикуем релиз (только для тегов)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.iso
+            out/*.sha256
+          prerelease: ${{ contains(github.ref_name, 'alpha') }}
+          generate_release_notes: true

@@ -1,0 +1,6 @@
+# Раскладки: английская + русская, переключение Alt+Shift
+XKBMODEL="pc105"
+XKBLAYOUT="us,ru"
+XKBVARIANT=","
+XKBOPTIONS="grp:alt_shift_toggle"
+BACKSPACE="guess"

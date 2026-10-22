@@ -1,0 +1,3 @@
+# Ставится ПОСЛЕДНИМ отдельным шагом: systemd-resolved подменяет /etc/resolv.conf,
+# а до этого момента сборке нужен рабочий DNS.
+systemd-resolved

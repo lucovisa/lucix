@@ -1,0 +1,17 @@
+# ОБЯЗАТЕЛЬНЫЕ пакеты. Если хоть одного нет в репозитории — сборка падает.
+# Один пакет на строку, # — комментарий.
+ubuntu-minimal
+casper
+linux-image-generic
+linux-firmware
+initramfs-tools
+locales
+sudo
+nano
+network-manager
+cinnamon-desktop-environment
+lightdm
+lightdm-gtk-greeter
+xorg
+console-setup
+keyboard-configuration

@@ -1,0 +1,34 @@
+# ЖЕЛАТЕЛЬНЫЕ пакеты. Если какого-то нет — сборка не падает,
+# пакет попадёт в out/skipped-packages.txt и мы его поправим.
+pipewire-audio
+pavucontrol
+gnome-terminal
+nemo-fileroller
+file-roller
+gnome-system-monitor
+xed
+gvfs-backends
+network-manager-gnome
+bluez
+blueman
+xdg-user-dirs
+xdg-user-dirs-gtk
+xdg-utils
+yaru-theme-gtk
+yaru-theme-icon
+fonts-ubuntu
+fonts-noto-core
+fonts-noto-color-emoji
+mesa-vulkan-drivers
+libgl1-mesa-dri
+mesa-utils
+x11-xserver-utils
+curl
+wget
+ca-certificates
+pciutils
+usbutils
+less
+bash-completion
+gnupg
+software-properties-common
