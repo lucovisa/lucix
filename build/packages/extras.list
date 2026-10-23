@@ -1,5 +1,4 @@
-# ЖЕЛАТЕЛЬНЫЕ пакеты. Если какого-то нет — сборка не падает,
-# пакет попадёт в out/skipped-packages.txt и мы его поправим.
+#желательные пакеты
 pipewire-audio
 pavucontrol
 gnome-terminal
@@ -32,3 +31,6 @@ less
 bash-completion
 gnupg
 software-properties-common
+xfsprogs
+plymouth-label
+plymouth-theme-ubuntu-text

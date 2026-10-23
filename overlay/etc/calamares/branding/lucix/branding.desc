@@ -1,0 +1,35 @@
+---
+componentName: lucix
+
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 820px,540px
+windowPlacement: center
+
+strings:
+  productName: Lucix
+  shortProductName: Lucix
+  version: "2026"
+  shortVersion: "2026"
+  versionedName: Lucix
+  shortVersionedName: Lucix
+  bootloaderEntryName: Lucix
+  productUrl: https://github.com/lucovisa/lucix
+  supportUrl: https://github.com/lucovisa/lucix/issues
+  knownIssuesUrl: https://github.com/lucovisa/lucix/issues
+  releaseNotesUrl: https://github.com/lucovisa/lucix/releases
+  donateUrl: https://github.com/lucovisa/lucix
+
+images:
+  productLogo: "logo.png"
+  productIcon: "icon.png"
+  productWelcome: "welcome.png"
+
+slideshow: "show.qml"
+slideshowAPI: 2
+
+style:
+  sidebarBackground: "#14161c"
+  sidebarText: "#ffffff"
+  sidebarTextSelect: "#8a90a0"

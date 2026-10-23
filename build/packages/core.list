@@ -1,5 +1,4 @@
-# ОБЯЗАТЕЛЬНЫЕ пакеты. Если хоть одного нет в репозитории — сборка падает.
-# Один пакет на строку, # — комментарий.
+#обязательные пакеты
 ubuntu-minimal
 casper
 linux-image-generic
@@ -15,3 +14,25 @@ lightdm-gtk-greeter
 xorg
 console-setup
 keyboard-configuration
+#установщик
+calamares
+rsync
+parted
+gdisk
+dosfstools
+e2fsprogs
+btrfs-progs
+ntfs-3g
+cryptsetup
+cryptsetup-initramfs
+squashfs-tools
+#загрузчик для установленной системы
+grub-efi-amd64-signed
+grub-efi-amd64-bin
+shim-signed
+grub-pc-bin
+grub-common
+efibootmgr
+os-prober
+#заставка
+plymouth

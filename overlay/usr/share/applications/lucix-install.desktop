@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install Lucix
+Name[ru]=Установить Lucix
+Comment=Install Lucix on this computer
+Comment[ru]=Установить Lucix на этот компьютер
+Exec=sudo -E calamares
+Icon=lucix
+Terminal=false
+Categories=System;
+StartupNotify=true
