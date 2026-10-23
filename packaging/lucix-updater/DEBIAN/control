@@ -1,0 +1,10 @@
+Package: lucix-updater
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: all
+Maintainer: Lucix <lucovisa@users.noreply.github.com>
+Depends: python3, python3-gi, gir1.2-gtk-3.0
+Recommends: timeshift, ubuntu-drivers-common, pkexec | policykit-1
+Description: Lucix Update
+ Graphical updater for Lucix releases, Ubuntu packages and drivers.

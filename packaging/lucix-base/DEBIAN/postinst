@@ -1,0 +1,56 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+configure)
+  VER="$(dpkg-query -W -f='${Version}' lucix-base 2>/dev/null || echo unknown)"
+
+  #версия системы
+  printf 'NAME=Lucix\nVERSION=%s\nSTAGE=alpha\n' "$VER" > /etc/lucix-release
+
+  #имя и значок в os-release
+  osr=/usr/lib/os-release
+  if [ -f "$osr" ] && [ ! -L "$osr" ]; then
+    setkv() {
+      if grep -q "^$1=" "$osr"; then
+        sed -i "s|^$1=.*|$1=$2|" "$osr"
+      else
+        echo "$1=$2" >> "$osr"
+      fi
+    }
+    setkv NAME '"Lucix"'
+    setkv PRETTY_NAME "\"Lucix $VER\""
+    setkv LOGO lucix
+  fi
+
+  #заставка
+  theme=/usr/share/plymouth/themes/lucix/lucix.plymouth
+  if command -v update-alternatives >/dev/null 2>&1; then
+    update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth "$theme" 300 || true
+    update-alternatives --set default.plymouth "$theme" || true
+  fi
+  conf=/etc/plymouth/plymouthd.conf
+  mkdir -p /etc/plymouth
+  if [ ! -f "$conf" ]; then
+    printf '[Daemon]\nTheme=lucix\nShowDelay=0\n' > "$conf"
+  elif grep -q '^Theme=' "$conf"; then
+    sed -i 's/^Theme=.*/Theme=lucix/' "$conf"
+  elif grep -q '^\[Daemon\]' "$conf"; then
+    sed -i '/^\[Daemon\]/a Theme=lucix' "$conf"
+  else
+    printf '\n[Daemon]\nTheme=lucix\n' >> "$conf"
+  fi
+
+  #кэш иконок
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
+  fi
+
+  #initramfs на сборке образа обновляет сам скрипт сборки
+  if [ -z "$LUCIX_BUILD" ] && command -v update-initramfs >/dev/null 2>&1; then
+    update-initramfs -u || true
+  fi
+  ;;
+esac
+
+exit 0

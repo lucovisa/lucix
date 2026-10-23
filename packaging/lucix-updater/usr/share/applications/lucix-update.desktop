@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Lucix Update
+Name[ru]=Обновление Lucix
+Comment=Update Lucix, system packages and drivers
+Comment[ru]=Обновление Lucix, системы и драйверов
+Exec=lucix-update
+Icon=lucix
+Terminal=false
+Categories=System;Settings;
+StartupNotify=true

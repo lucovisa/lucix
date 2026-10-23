@@ -1,0 +1,9 @@
+Package: lucix-base
+Version: @VERSION@
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: Lucix <lucovisa@users.noreply.github.com>
+Depends: plymouth
+Description: Lucix branding and base settings
+ Icons, boot splash and base configuration for Lucix.

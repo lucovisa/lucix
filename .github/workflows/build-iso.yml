@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Версия например 2026.10.22-alpha1 или пусто для dev"
+        description: "Версия например 2026.10.23-alpha1 или пусто для dev"
         required: false
         default: ""
   #релиз по тегу
@@ -50,6 +50,11 @@ jobs:
             grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools ubuntu-keyring \
             qemu-system-x86 ovmf socat
 
+      - name: Собираем пакеты lucix
+        env:
+          LUCIX_VERSION: ${{ steps.ver.outputs.version }}
+        run: bash ./build/build-debs.sh
+
       - name: Собираем ISO
         env:
           LUCIX_VERSION: ${{ steps.ver.outputs.version }}
@@ -68,7 +73,7 @@ jobs:
             exit 1
           fi
 
-      - name: Сохраняем ISO
+      - name: Сохраняем ISO и пакеты
         uses: actions/upload-artifact@v4
         with:
           name: lucix-iso-${{ steps.ver.outputs.version }}
@@ -76,6 +81,7 @@ jobs:
             out/*.iso
             out/*.sha256
             out/skipped-packages.txt
+            out/debs/*
           compression-level: 0
           retention-days: 14
 
@@ -111,5 +117,7 @@ jobs:
           files: |
             out/*.iso
             out/*.sha256
+            out/debs/*.deb
+            out/debs/SHA256SUMS
           prerelease: ${{ contains(github.ref_name, 'alpha') }}
           generate_release_notes: true

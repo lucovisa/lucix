@@ -1,0 +1,176 @@
+#!/usr/bin/python3
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+REPO = "lucovisa/lucix"
+API = "https://api.github.com/repos/%s/releases" % REPO
+PREFIX = "https://github.com/%s/releases/download/" % REPO
+TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+NAME_RE = re.compile(r"^[A-Za-z0-9._+~-]{1,128}$")
+APT_OPTS = ["-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
+
+
+def say(msg):
+    print(msg, flush=True)
+
+
+def run(cmd):
+    say("$ " + " ".join(cmd))
+    return subprocess.call(cmd, env=ENV)
+
+
+#снимок системы
+def snapshot(comment):
+    if not shutil.which("timeshift"):
+        say("SNAPSHOT_FAILED timeshift not installed")
+        return False
+    if run(["timeshift", "--create", "--comments", comment, "--tags", "D", "--scripted"]) != 0:
+        say("SNAPSHOT_FAILED")
+        return False
+    return True
+
+
+def request(url):
+    return urllib.request.Request(url, headers={"User-Agent": "lucix-update", "Accept": "application/vnd.github+json"})
+
+
+def get_json(url):
+    with urllib.request.urlopen(request(url), timeout=30) as r:
+        return json.load(r)
+
+
+def download(url, dest):
+    with urllib.request.urlopen(request(url), timeout=120) as r, open(dest, "wb") as f:
+        shutil.copyfileobj(r, f)
+
+
+def parse_sums(text):
+    sums = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            sums[parts[1].lstrip("*")] = parts[0].lower()
+    return sums
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def package_name(path):
+    r = subprocess.run(["dpkg-deb", "-f", path, "Package"], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+#обновление lucix из релиза
+def lucix_update(tag, snap):
+    if not TAG_RE.match(tag):
+        say("bad tag")
+        return 2
+    if snap and not snapshot("Lucix: before update " + tag):
+        return 3
+
+    say("release " + tag)
+    rel = get_json("%s/tags/%s" % (API, tag))
+    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    debs = sorted(n for n in assets if n.endswith(".deb"))
+    if "SHA256SUMS" not in assets or not debs:
+        say("release has no packages")
+        return 2
+    for name in debs + ["SHA256SUMS"]:
+        if not NAME_RE.match(name) or not assets[name].startswith(PREFIX):
+            say("unexpected asset " + name)
+            return 2
+
+    work = tempfile.mkdtemp(prefix="lucix-upd-")
+    os.chmod(work, 0o755)
+    try:
+        for name in debs + ["SHA256SUMS"]:
+            say("download " + name)
+            download(assets[name], os.path.join(work, name))
+
+        with open(os.path.join(work, "SHA256SUMS")) as f:
+            sums = parse_sums(f.read())
+        paths = []
+        for name in debs:
+            path = os.path.join(work, name)
+            if sums.get(name) != sha256_file(path):
+                say("checksum mismatch " + name)
+                return 2
+            if not package_name(path).startswith("lucix-"):
+                say("foreign package " + name)
+                return 2
+            os.chmod(path, 0o644)
+            paths.append(path)
+        say("checksums ok")
+
+        rc = run(["apt-get"] + APT_OPTS + ["install"] + paths)
+        say("DONE" if rc == 0 else "FAILED")
+        return 0 if rc == 0 else 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def apt_update():
+    return 0 if run(["apt-get", "update"]) == 0 else 1
+
+
+def apt_upgrade(snap):
+    if snap and not snapshot("Lucix: before system upgrade"):
+        return 3
+    if run(["apt-get", "update"]) != 0:
+        return 1
+    return 0 if run(["apt-get"] + APT_OPTS + ["upgrade"]) == 0 else 1
+
+
+def drivers_install(snap):
+    if snap and not snapshot("Lucix: before driver install"):
+        return 3
+    if run(["ubuntu-drivers", "install"]) == 0:
+        say("DONE reboot is needed")
+        return 0
+    if run(["ubuntu-drivers", "autoinstall"]) == 0:
+        say("DONE reboot is needed")
+        return 0
+    return 1
+
+
+def main(argv):
+    if os.geteuid() != 0:
+        say("must run as root")
+        return 2
+    if len(argv) < 2:
+        say("usage: lucix-helper lucix-update TAG | apt-update | apt-upgrade | drivers-install")
+        return 2
+    snap = "--no-snapshot" not in argv
+    cmd = argv[1]
+    try:
+        if cmd == "lucix-update" and len(argv) >= 3:
+            return lucix_update(argv[2], snap)
+        if cmd == "apt-update":
+            return apt_update()
+        if cmd == "apt-upgrade":
+            return apt_upgrade(snap)
+        if cmd == "drivers-install":
+            return drivers_install(snap)
+    except Exception as e:
+        say("error: %s" % e)
+        return 1
+    say("unknown command")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

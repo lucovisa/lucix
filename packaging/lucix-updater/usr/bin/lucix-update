@@ -1,0 +1,335 @@
+#!/usr/bin/python3
+import json
+import os
+import subprocess
+import threading
+import urllib.request
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import GLib, Gtk, Pango
+
+REPO = "lucovisa/lucix"
+HELPER = "/usr/lib/lucix/lucix-helper"
+SHOW_TEST_DEFAULT = True
+
+RU = os.environ.get("LANG", "").startswith("ru")
+
+TEXT = {
+    "title": ("Lucix Update", "Обновление Lucix"),
+    "tab_lucix": ("Lucix", "Lucix"),
+    "tab_system": ("System", "Система"),
+    "tab_drivers": ("Drivers", "Драйверы"),
+    "installed": ("Installed version: %s", "Установленная версия: %s"),
+    "show_test": ("Show test versions", "Показывать тестовые версии"),
+    "check": ("Check for updates", "Проверить обновления"),
+    "install": ("Install selected update", "Установить выбранное обновление"),
+    "checking": ("Checking...", "Проверяю..."),
+    "uptodate": ("You are up to date", "У вас последняя версия"),
+    "found": ("Updates available: %d", "Доступно обновлений: %d"),
+    "net_error": ("Could not reach GitHub: %s", "Не удалось связаться с GitHub: %s"),
+    "col_version": ("Version", "Версия"),
+    "col_date": ("Date", "Дата"),
+    "col_type": ("Type", "Тип"),
+    "test": ("test", "тестовая"),
+    "stable": ("stable", "стабильная"),
+    "sys_info": ("Ubuntu packages are updated from the official repositories.", "Пакеты Ubuntu обновляются из официальных репозиториев."),
+    "sys_check": ("Check", "Проверить"),
+    "sys_upgrade": ("Install system updates", "Установить обновления системы"),
+    "sys_count": ("Packages to upgrade: %d", "Пакетов к обновлению: %d"),
+    "drv_info": ("Detected hardware that needs drivers:", "Найдено оборудование, которому нужны драйверы:"),
+    "drv_none": ("Nothing detected", "Ничего не найдено"),
+    "drv_install": ("Install recommended drivers (NVIDIA)", "Установить рекомендованные драйверы (NVIDIA)"),
+    "no_snap_title": ("Snapshot was not created", "Снимок системы не создан"),
+    "no_snap_text": ("Continue without a snapshot? You will not be able to roll back.", "Продолжить без снимка? Откатиться будет нельзя."),
+    "auth_fail": ("Authorization was cancelled or failed.", "Авторизация отменена или не удалась."),
+    "finished_ok": ("Finished successfully.", "Готово."),
+    "finished_bad": ("Finished with an error.", "Завершено с ошибкой."),
+}
+
+
+def t(key):
+    return TEXT[key][1 if RU else 0]
+
+
+def deb_version(tag):
+    return tag.lstrip("v").replace("-", "~")
+
+
+def installed_version():
+    r = subprocess.run(["dpkg-query", "-W", "-f=${Version}", "lucix-base"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def is_newer(new, cur):
+    if not cur:
+        return True
+    return subprocess.run(["dpkg", "--compare-versions", new, "gt", cur]).returncode == 0
+
+
+def fetch_releases():
+    url = "https://api.github.com/repos/%s/releases?per_page=15" % REPO
+    req = urllib.request.Request(url, headers={"User-Agent": "lucix-update", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.load(r)
+    result = []
+    for rel in data:
+        if rel.get("draft"):
+            continue
+        names = [a["name"] for a in rel.get("assets", [])]
+        if "SHA256SUMS" in names:
+            result.append(rel)
+    return result
+
+
+class Updater(Gtk.Window):
+    def __init__(self):
+        super().__init__(title=t("title"))
+        self.set_default_size(780, 640)
+        self.set_icon_name("lucix")
+        self.releases = []
+        self.busy_widgets = []
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root.set_border_width(10)
+        self.add(root)
+
+        notebook = Gtk.Notebook()
+        root.pack_start(notebook, True, True, 0)
+        notebook.append_page(self.build_lucix_tab(), Gtk.Label(label=t("tab_lucix")))
+        notebook.append_page(self.build_system_tab(), Gtk.Label(label=t("tab_system")))
+        notebook.append_page(self.build_drivers_tab(), Gtk.Label(label=t("tab_drivers")))
+
+        self.log = Gtk.TextView()
+        self.log.set_editable(False)
+        self.log.set_monospace(True)
+        self.log.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(170)
+        scroll.add(self.log)
+        root.pack_start(scroll, False, True, 0)
+
+        self.connect("destroy", Gtk.main_quit)
+        self.show_all()
+        self.refresh_installed()
+        self.check_lucix()
+        self.load_drivers()
+
+    #вкладка lucix
+    def build_lucix_tab(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(8)
+
+        self.installed_label = Gtk.Label(xalign=0)
+        box.pack_start(self.installed_label, False, False, 0)
+
+        row = Gtk.Box(spacing=8)
+        self.test_check = Gtk.CheckButton(label=t("show_test"))
+        self.test_check.set_active(SHOW_TEST_DEFAULT)
+        self.test_check.connect("toggled", lambda *_: self.check_lucix())
+        row.pack_start(self.test_check, False, False, 0)
+        self.check_btn = Gtk.Button(label=t("check"))
+        self.check_btn.connect("clicked", lambda *_: self.check_lucix())
+        row.pack_end(self.check_btn, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        self.status_label = Gtk.Label(xalign=0)
+        box.pack_start(self.status_label, False, False, 0)
+
+        self.store = Gtk.ListStore(str, str, str)
+        self.tree = Gtk.TreeView(model=self.store)
+        for i, key in enumerate(("col_version", "col_date", "col_type")):
+            self.tree.append_column(Gtk.TreeViewColumn(t(key), Gtk.CellRendererText(), text=i))
+        self.tree.get_selection().connect("changed", self.on_select)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(130)
+        scroll.add(self.tree)
+        box.pack_start(scroll, True, True, 0)
+
+        self.notes = Gtk.TextView()
+        self.notes.set_editable(False)
+        self.notes.set_wrap_mode(Gtk.WrapMode.WORD)
+        nscroll = Gtk.ScrolledWindow()
+        nscroll.set_min_content_height(110)
+        nscroll.add(self.notes)
+        box.pack_start(nscroll, True, True, 0)
+
+        self.install_btn = Gtk.Button(label=t("install"))
+        self.install_btn.set_sensitive(False)
+        self.install_btn.connect("clicked", self.install_selected)
+        box.pack_start(self.install_btn, False, False, 0)
+        self.busy_widgets += [self.check_btn, self.install_btn]
+        return box
+
+    #вкладка система
+    def build_system_tab(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_border_width(8)
+        box.pack_start(Gtk.Label(label=t("sys_info"), xalign=0), False, False, 0)
+        self.sys_label = Gtk.Label(xalign=0)
+        box.pack_start(self.sys_label, False, False, 0)
+        check = Gtk.Button(label=t("sys_check"))
+        check.connect("clicked", self.check_system)
+        upgrade = Gtk.Button(label=t("sys_upgrade"))
+        upgrade.connect("clicked", lambda *_: self.run_helper(["apt-upgrade"]))
+        box.pack_start(check, False, False, 0)
+        box.pack_start(upgrade, False, False, 0)
+        self.busy_widgets += [check, upgrade]
+        return box
+
+    #вкладка драйверы
+    def build_drivers_tab(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_border_width(8)
+        box.pack_start(Gtk.Label(label=t("drv_info"), xalign=0), False, False, 0)
+        self.drv_view = Gtk.TextView()
+        self.drv_view.set_editable(False)
+        self.drv_view.set_monospace(True)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(160)
+        scroll.add(self.drv_view)
+        box.pack_start(scroll, True, True, 0)
+        btn = Gtk.Button(label=t("drv_install"))
+        btn.connect("clicked", lambda *_: self.run_helper(["drivers-install"]))
+        box.pack_start(btn, False, False, 0)
+        self.busy_widgets.append(btn)
+        return box
+
+    #журнал
+    def append_log(self, text):
+        buf = self.log.get_buffer()
+        buf.insert(buf.get_end_iter(), text if text.endswith("\n") else text + "\n")
+        self.log.scroll_to_mark(buf.get_insert(), 0, False, 0, 0)
+        mark = buf.create_mark(None, buf.get_end_iter(), False)
+        self.log.scroll_to_mark(mark, 0, False, 0, 0)
+
+    def set_busy(self, busy):
+        for w in self.busy_widgets:
+            w.set_sensitive(not busy)
+
+    def refresh_installed(self):
+        self.installed = installed_version()
+        self.installed_label.set_text(t("installed") % (self.installed or "?"))
+
+    #проверка релизов
+    def check_lucix(self):
+        self.status_label.set_text(t("checking"))
+
+        def worker():
+            try:
+                rels = fetch_releases()
+                error = None
+            except Exception as e:
+                rels, error = [], str(e)
+            GLib.idle_add(self.show_releases, rels, error)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def show_releases(self, rels, error):
+        self.store.clear()
+        self.releases = []
+        self.notes.get_buffer().set_text("")
+        if error:
+            self.status_label.set_text(t("net_error") % error)
+            return
+        show_test = self.test_check.get_active()
+        for rel in rels:
+            if rel.get("prerelease") and not show_test:
+                continue
+            tag = rel["tag_name"]
+            if not is_newer(deb_version(tag), self.installed):
+                continue
+            self.releases.append(rel)
+            kind = t("test") if rel.get("prerelease") else t("stable")
+            self.store.append([tag, (rel.get("published_at") or "")[:10], kind])
+        if self.releases:
+            self.status_label.set_text(t("found") % len(self.releases))
+            self.tree.set_cursor(0)
+        else:
+            self.status_label.set_text(t("uptodate"))
+        self.install_btn.set_sensitive(bool(self.releases))
+
+    def selected_tag(self):
+        model, it = self.tree.get_selection().get_selected()
+        return model[it][0] if it else None
+
+    def on_select(self, selection):
+        tag = self.selected_tag()
+        for rel in self.releases:
+            if rel["tag_name"] == tag:
+                self.notes.get_buffer().set_text(rel.get("body") or rel.get("name") or tag)
+
+    def install_selected(self, *_):
+        tag = self.selected_tag()
+        if tag:
+            self.run_helper(["lucix-update", tag])
+
+    #система
+    def check_system(self, *_):
+        self.set_busy(True)
+
+        def worker():
+            subprocess.call(["pkexec", HELPER, "apt-update"])
+            r = subprocess.run(["apt", "list", "--upgradable"], capture_output=True, text=True)
+            lines = [l for l in r.stdout.splitlines() if "/" in l]
+            GLib.idle_add(self.sys_checked, len(lines))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def sys_checked(self, count):
+        self.set_busy(False)
+        self.sys_label.set_text(t("sys_count") % count)
+
+    #драйверы
+    def load_drivers(self):
+        def worker():
+            try:
+                r = subprocess.run(["ubuntu-drivers", "devices"], capture_output=True, text=True, timeout=60)
+                out = r.stdout.strip() or t("drv_none")
+            except Exception as e:
+                out = str(e)
+            GLib.idle_add(self.drv_view.get_buffer().set_text, out)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    #запуск помощника с правами
+    def run_helper(self, args):
+        self.set_busy(True)
+        self.append_log("--- " + " ".join(args))
+
+        def worker():
+            rc = 1
+            try:
+                p = subprocess.Popen(["pkexec", HELPER] + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                for line in p.stdout:
+                    GLib.idle_add(self.append_log, line.rstrip("\n"))
+                rc = p.wait()
+            except Exception as e:
+                GLib.idle_add(self.append_log, str(e))
+            GLib.idle_add(self.helper_finished, rc, args)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def helper_finished(self, rc, args):
+        self.set_busy(False)
+        if rc == 3:
+            dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.YES_NO, text=t("no_snap_title"))
+            dialog.format_secondary_text(t("no_snap_text"))
+            answer = dialog.run()
+            dialog.destroy()
+            if answer == Gtk.ResponseType.YES:
+                self.run_helper(args + ["--no-snapshot"])
+            return
+        if rc in (126, 127):
+            self.append_log(t("auth_fail"))
+            return
+        self.append_log(t("finished_ok") if rc == 0 else t("finished_bad"))
+        self.refresh_installed()
+        if args[0] == "lucix-update":
+            self.check_lucix()
+
+
+if __name__ == "__main__":
+    Updater()
+    Gtk.main()

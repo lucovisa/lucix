@@ -1,0 +1,47 @@
+#фон
+Window.SetBackgroundTopColor(0.078, 0.086, 0.11);
+Window.SetBackgroundBottomColor(0.078, 0.086, 0.11);
+
+#логотип
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetPosition(Window.GetWidth() / 2 - logo.image.GetWidth() / 2, Window.GetHeight() / 2 - logo.image.GetHeight() / 2, 1);
+angle = 0;
+
+#вращение
+fun refresh_callback() {
+  angle += 0.025;
+  rotated = logo.image.Rotate(angle);
+  logo.sprite.SetImage(rotated);
+  logo.sprite.SetPosition(Window.GetWidth() / 2 - rotated.GetWidth() / 2, Window.GetHeight() / 2 - rotated.GetHeight() / 2, 1);
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+#пароль диска
+pass_prompt = Sprite();
+pass_bullets = Sprite();
+
+fun display_password(prompt, bullets) {
+  img = Image.Text(prompt, 1, 1, 1);
+  pass_prompt.SetImage(img);
+  pass_prompt.SetPosition(Window.GetWidth() / 2 - img.GetWidth() / 2, Window.GetHeight() * 0.78, 10);
+  pass_prompt.SetOpacity(1);
+  if (bullets > 0) {
+    stars = "";
+    for (i = 0; i < bullets; i++) stars += "*";
+    b = Image.Text(stars, 1, 1, 1);
+    pass_bullets.SetImage(b);
+    pass_bullets.SetPosition(Window.GetWidth() / 2 - b.GetWidth() / 2, Window.GetHeight() * 0.78 + 36, 10);
+    pass_bullets.SetOpacity(1);
+  } else {
+    pass_bullets.SetOpacity(0);
+  }
+}
+
+fun display_normal() {
+  pass_prompt.SetOpacity(0);
+  pass_bullets.SetOpacity(0);
+}
+
+Plymouth.SetDisplayPasswordFunction(display_password);
+Plymouth.SetDisplayNormalFunction(display_normal);

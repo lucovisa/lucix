@@ -34,3 +34,11 @@ software-properties-common
 xfsprogs
 plymouth-label
 plymouth-theme-ubuntu-text
+#для апдейтера
+timeshift
+ubuntu-drivers-common
+pkexec
+polkitd
+policykit-1-gnome
+polkit-1-gnome
+polkit-gnome

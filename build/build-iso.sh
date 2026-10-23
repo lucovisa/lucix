@@ -11,6 +11,7 @@ WORK="${WORK_DIR:-/mnt/lucix-work}"
 CHROOT="$WORK/chroot"
 ISO_DIR="$WORK/iso"
 OUT_DIR="$ROOT_DIR/out"
+DEBS_DIR="$OUT_DIR/debs"
 ISO_NAME="lucix-${LUCIX_VERSION}-${ARCH}.iso"
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -23,6 +24,9 @@ die()  { printf '\033[1;31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
 for cmd in debootstrap mksquashfs xorriso grub-mkrescue; do
   command -v "$cmd" >/dev/null || die "Не найдена команда $cmd"
 done
+
+#наши пакеты должны быть собраны заранее
+ls "$DEBS_DIR"/*.deb >/dev/null 2>&1 || die "Нет пакетов в $DEBS_DIR запусти build/build-debs.sh"
 
 #монтирование chroot
 mount_chroot() {
@@ -47,7 +51,7 @@ chroot_run() {
   chroot "$CHROOT" /usr/bin/env -i \
     HOME=/root TERM=xterm LC_ALL=C \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    DEBIAN_FRONTEND=noninteractive \
+    DEBIAN_FRONTEND=noninteractive LUCIX_BUILD=1 \
     "$@"
 }
 
@@ -70,16 +74,6 @@ apt_chroot() {
 #список пакетов без комментариев
 read_list() {
   grep -vE '^[[:space:]]*(#|$)' "$1" | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//'
-}
-
-#правка os-release
-set_osr() {
-  local file="$CHROOT/usr/lib/os-release"
-  if grep -q "^$1=" "$file"; then
-    sed -i "s|^$1=.*|$1=$2|" "$file"
-  else
-    echo "$1=$2" >> "$file"
-  fi
 }
 
 #подготовка
@@ -152,33 +146,24 @@ fi
 log "4/6 overlay и оформление"
 cp -a --no-preserve=ownership "$ROOT_DIR/overlay/." "$CHROOT/"
 
-cat > "$CHROOT/etc/lucix-release" <<EOF
-NAME=${LUCIX_NAME}
-VERSION=${LUCIX_VERSION}
-STAGE=${LUCIX_STAGE}
-BASE=Ubuntu ${UBUNTU_VERSION} LTS (${UBUNTU_SUITE})
-EOF
-
 #проверка что установщик на месте
 [[ -x "$CHROOT/usr/bin/calamares" ]] || die "calamares не установился"
 [[ -f "$CHROOT/etc/calamares/settings.conf" ]] || die "нет etc/calamares/settings.conf в overlay"
 [[ -f "$CHROOT/etc/calamares/branding/lucix/branding.desc" ]] || die "нет branding для calamares в overlay"
+
+#наши пакеты lucix-base и lucix-updater
+mkdir -p "$CHROOT/tmp/lucix-debs"
+cp "$DEBS_DIR"/*.deb "$CHROOT/tmp/lucix-debs/"
+mapfile -t DEBS < <(cd "$CHROOT/tmp/lucix-debs" && ls ./*.deb | sed 's|^\./|/tmp/lucix-debs/|')
+apt_chroot install --no-install-recommends "${DEBS[@]}"
+[[ -f "$CHROOT/etc/lucix-release" ]] || die "lucix-base не отработал нет etc/lucix-release"
+[[ -x "$CHROOT/usr/bin/lucix-update" ]] || die "lucix-updater не установился"
 
 #ярлык установки на рабочем столе
 chmod +x "$CHROOT/usr/share/applications/lucix-install.desktop"
 mkdir -p "$CHROOT/etc/skel/Desktop"
 cp "$CHROOT/usr/share/applications/lucix-install.desktop" "$CHROOT/etc/skel/Desktop/"
 chmod +x "$CHROOT/etc/skel/Desktop/lucix-install.desktop"
-
-#имя и значок системы
-set_osr NAME '"Lucix"'
-set_osr PRETTY_NAME "\"Lucix ${LUCIX_VERSION}\""
-set_osr LOGO "lucix"
-
-#заставка
-chroot_run update-alternatives --install /usr/share/plymouth/themes/default.plymouth default.plymouth /usr/share/plymouth/themes/lucix/lucix.plymouth 300 || warn "plymouth alternatives не встали"
-chroot_run update-alternatives --set default.plymouth /usr/share/plymouth/themes/lucix/lucix.plymouth || warn "plymouth тема не выбрана"
-chroot_run gtk-update-icon-cache -f /usr/share/icons/hicolor || warn "кэш иконок не обновлён"
 
 #локали
 chroot_run locale-gen en_US.UTF-8 ru_RU.UTF-8
