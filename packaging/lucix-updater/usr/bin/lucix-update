@@ -39,7 +39,8 @@ TEXT = {
     "sys_upgrade": ("Install system updates", "Установить обновления системы"),
     "sys_count": ("Packages to upgrade: %d", "Пакетов к обновлению: %d"),
     "drv_info": ("Detected hardware that needs drivers:", "Найдено оборудование, которому нужны драйверы:"),
-    "drv_none": ("Nothing detected", "Ничего не найдено"),
+    "drv_none": ("Nothing detected. Press Find drivers.", "Ничего не найдено. Нажмите «Найти драйверы»."),
+    "drv_scan": ("Find drivers (internet required)", "Найти драйверы (нужен интернет)"),
     "drv_install": ("Install recommended drivers (NVIDIA)", "Установить рекомендованные драйверы (NVIDIA)"),
     "no_snap_title": ("Snapshot was not created", "Снимок системы не создан"),
     "no_snap_text": ("Continue without a snapshot? You will not be able to roll back.", "Продолжить без снимка? Откатиться будет нельзя."),
@@ -190,10 +191,13 @@ class Updater(Gtk.Window):
         scroll.set_min_content_height(160)
         scroll.add(self.drv_view)
         box.pack_start(scroll, True, True, 0)
+        scan = Gtk.Button(label=t("drv_scan"))
+        scan.connect("clicked", lambda *_: self.run_helper(["drivers-scan"]))
+        box.pack_start(scan, False, False, 0)
         btn = Gtk.Button(label=t("drv_install"))
         btn.connect("clicked", lambda *_: self.run_helper(["drivers-install"]))
         box.pack_start(btn, False, False, 0)
-        self.busy_widgets.append(btn)
+        self.busy_widgets += [scan, btn]
         return box
 
     #журнал
@@ -328,6 +332,8 @@ class Updater(Gtk.Window):
         self.refresh_installed()
         if args[0] == "lucix-update":
             self.check_lucix()
+        if args[0] in ("drivers-scan", "drivers-install"):
+            self.load_drivers()
 
 
 if __name__ == "__main__":

@@ -138,6 +138,8 @@ def apt_upgrade(snap):
 def drivers_install(snap):
     if snap and not snapshot("Lucix: before driver install"):
         return 3
+    if run(["apt-get", "update"]) != 0:
+        return 1
     if run(["ubuntu-drivers", "install"]) == 0:
         say("DONE reboot is needed")
         return 0
@@ -159,7 +161,7 @@ def main(argv):
     try:
         if cmd == "lucix-update" and len(argv) >= 3:
             return lucix_update(argv[2], snap)
-        if cmd == "apt-update":
+        if cmd in ("apt-update", "drivers-scan"):
             return apt_update()
         if cmd == "apt-upgrade":
             return apt_upgrade(snap)
