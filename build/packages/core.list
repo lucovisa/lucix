@@ -36,3 +36,7 @@ efibootmgr
 os-prober
 #заставка
 plymouth
+#wifi
+wpasupplicant
+iw
+wireless-regdb

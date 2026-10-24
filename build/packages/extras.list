@@ -42,3 +42,6 @@ polkitd
 policykit-1-gnome
 polkit-1-gnome
 polkit-gnome
+#usb wifi адаптеры
+usb-modeswitch
+usb-modeswitch-data
