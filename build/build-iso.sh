@@ -129,6 +129,11 @@ mapfile -t CORE < <(read_list "$ROOT_DIR/build/packages/core.list")
 log "    core ${#CORE[@]} шт"
 apt_chroot install --no-install-recommends "${CORE[@]}"
 
+#модули ядра включая драйверы wifi
+KV="$(chroot_run dpkg-query -W -f='${Package}\n' 'linux-image-[0-9]*' | sort -V | tail -n1 | sed 's/^linux-image-//')"
+log "    модули ядра $KV"
+apt_chroot install --no-install-recommends "linux-modules-extra-$KV" || warn "linux-modules-extra-$KV не поставился"
+
 mapfile -t EXTRAS < <(read_list "$ROOT_DIR/build/packages/extras.list")
 log "    extras ${#EXTRAS[@]} шт"
 : > "$OUT_DIR/skipped-packages.txt"

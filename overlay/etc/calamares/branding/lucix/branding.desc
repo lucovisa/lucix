@@ -1,8 +1,9 @@
 ---
 componentName: lucix
 
-welcomeStyleCalamares: true
-welcomeExpandingLogo: true
+#без большой картинки на экране приветствия
+welcomeStyleCalamares: false
+welcomeExpandingLogo: false
 windowExpanding: normal
 windowSize: 820px,540px
 windowPlacement: center
@@ -24,7 +25,6 @@ strings:
 images:
   productLogo: "logo.png"
   productIcon: "icon.png"
-  productWelcome: "welcome.png"
 
 slideshow: "show.qml"
 slideshowAPI: 2

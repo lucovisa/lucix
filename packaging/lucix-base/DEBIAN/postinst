@@ -6,7 +6,7 @@ configure)
   VER="$(dpkg-query -W -f='${Version}' lucix-base 2>/dev/null || echo unknown)"
 
   #версия системы
-  printf 'NAME=Lucix\nVERSION=%s\nSTAGE=alpha\n' "$VER" > /etc/lucix-release
+  printf 'NAME=Lucix\nVERSION=%s\nSTAGE=pre-release\n' "$VER" > /etc/lucix-release
 
   #имя и значок в os-release
   osr=/usr/lib/os-release

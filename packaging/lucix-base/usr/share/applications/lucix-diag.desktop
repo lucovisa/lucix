@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Lucix Diagnostics
+Name[ru]=Диагностика Lucix
+Comment=Collect network and hardware information
+Comment[ru]=Собрать сведения о сети и оборудовании
+Exec=lucix-diag
+Icon=lucix
+Terminal=false
+Categories=System;

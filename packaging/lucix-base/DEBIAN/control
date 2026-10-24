@@ -4,6 +4,7 @@ Section: misc
 Priority: optional
 Architecture: all
 Maintainer: Lucix <lucovisa@users.noreply.github.com>
-Depends: plymouth
+Depends: plymouth, wpasupplicant, iw, wireless-regdb
+Recommends: usb-modeswitch, usb-modeswitch-data
 Description: Lucix branding and base settings
- Icons, boot splash and base configuration for Lucix.
+ Icons, boot splash, network and base configuration for Lucix.

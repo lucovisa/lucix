@@ -1,0 +1,51 @@
+#!/bin/bash
+out="$HOME/lucix-diag.txt"
+kv="$(uname -r)"
+
+yn() { if "$@" >/dev/null 2>&1; then echo "да"; else echo "нет"; fi; }
+ver() { dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo "НЕТ"; }
+
+usb="$(lsusb 2>/dev/null)"
+if echo "$usb" | grep -qi '0bda:b812'; then adapter="виден как wifi (0bda:b812)"
+elif echo "$usb" | grep -qi '0bda:1a2b'; then adapter="виден как флешка с драйверами (0bda:1a2b) нужен modeswitch"
+else adapter="не найден в списке usb"; fi
+
+{
+  echo "LUCIX ДИАГНОСТИКА $(date '+%F %T')"
+  echo
+  echo "ИТОГ"
+  echo "адаптер:            $adapter"
+  echo "файл драйвера есть: $(yn bash -c "find /lib/modules/$kv -name 'rtw88_8822bu*' | grep -q .")"
+  echo "драйвер загружен:   $(yn bash -c "lsmod | grep -q rtw88_8822bu")"
+  echo "прошивка есть:      $(yn bash -c "ls /lib/firmware/rtw88 | grep -qi 8822b")"
+  echo "wpa_supplicant:     $(ver wpasupplicant)"
+  echo "usb-modeswitch:     $(ver usb-modeswitch)"
+  echo "wifi в nmcli:       $(yn bash -c "nmcli -t device | grep -q ':wifi:'")"
+  echo "rfkill блокирует:   $(yn bash -c "rfkill list | grep -qi 'blocked: yes'")"
+  echo "ядро:               $kv"
+  echo "версия lucix:       $(grep '^VERSION=' /etc/lucix-release 2>/dev/null | cut -d= -f2)"
+  echo
+  echo "=== lsusb"
+  echo "$usb" | head -25
+  echo
+  echo "=== nmcli device"
+  nmcli device status 2>&1 | head -15
+  echo
+  echo "=== rfkill"
+  rfkill list 2>&1 | head -15
+  echo
+  echo "=== lsmod wifi"
+  lsmod | grep -Ei 'rtw|rtl|cfg80211|mac80211' | head -15
+  echo
+  echo "=== dmesg"
+  sudo -n dmesg 2>&1 | grep -iE 'rtw|rtl88|8812|b812|0bda|cfg80211|wlan|firmware' | tail -25
+  echo
+  echo "=== службы"
+  systemctl is-active NetworkManager wpa_supplicant 2>&1
+} > "$out" 2>&1
+
+if command -v xed >/dev/null 2>&1; then
+  xed "$out" &
+else
+  xdg-open "$out" &
+fi
