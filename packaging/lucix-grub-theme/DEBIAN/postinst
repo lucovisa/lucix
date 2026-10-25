@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+configure)
+  #на сборке образа и в live ничего не трогаем
+  if [ -z "$LUCIX_BUILD" ] && ! grep -q 'boot=casper' /proc/cmdline 2>/dev/null && [ -f /etc/default/grub ]; then
+    setkv() {
+      if grep -q "^$1=" /etc/default/grub; then
+        sed -i "s|^$1=.*|$1=$2|" /etc/default/grub
+      elif grep -q "^#$1=" /etc/default/grub; then
+        sed -i "s|^#$1=.*|$1=$2|" /etc/default/grub
+      else
+        echo "$1=$2" >> /etc/default/grub
+      fi
+    }
+    setkv GRUB_TERMINAL_OUTPUT gfxterm
+    setkv GRUB_THEME /boot/grub/themes/minegrub-world-selection/theme.txt
+    if command -v update-grub >/dev/null 2>&1; then
+      update-grub || true
+    fi
+  fi
+  ;;
+esac
+
+exit 0

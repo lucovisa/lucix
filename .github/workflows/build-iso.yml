@@ -50,6 +50,9 @@ jobs:
             grub-pc-bin grub-efi-amd64-bin grub-common mtools dosfstools ubuntu-keyring \
             qemu-system-x86 ovmf socat
 
+      - name: Скачиваем тему загрузчика
+        run: git clone --depth 1 https://github.com/Lxtharia/minegrub-world-sel-theme.git build/third-party/minegrub
+
       - name: Собираем пакеты lucix
         env:
           LUCIX_VERSION: ${{ steps.ver.outputs.version }}

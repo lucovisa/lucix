@@ -10,12 +10,26 @@ OUT="$ROOT_DIR/out/debs"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-for pkg in lucix-base lucix-updater; do
+THEME_DIR="$ROOT_DIR/build/third-party/minegrub"
+
+for pkg in lucix-base lucix-updater lucix-grub-theme; do
+  if [[ "$pkg" == "lucix-grub-theme" && ! -d "$THEME_DIR/minegrub-world-selection" ]]; then
+    echo "тема загрузчика не скачана пропускаем $pkg"
+    continue
+  fi
   tmp="$(mktemp -d)"
   cp -a "$ROOT_DIR/packaging/$pkg/." "$tmp/"
   find "$tmp" -name '__pycache__' -prune -exec rm -rf {} +
   find "$tmp" -name '*.pyc' -delete
   sed -i "s/@VERSION@/$DEB_VERSION/" "$tmp/DEBIAN/control"
+
+  #файлы темы и лицензия автора
+  if [[ "$pkg" == "lucix-grub-theme" ]]; then
+    mkdir -p "$tmp/boot/grub/themes" "$tmp/usr/share/doc/lucix-grub-theme"
+    cp -a "$THEME_DIR/minegrub-world-selection" "$tmp/boot/grub/themes/minegrub-world-selection"
+    cp "$THEME_DIR/LICENSE" "$tmp/usr/share/doc/lucix-grub-theme/copyright"
+    echo "Source: https://github.com/Lxtharia/minegrub-world-sel-theme (MIT)" > "$tmp/usr/share/doc/lucix-grub-theme/SOURCE"
+  fi
 
   #права на скрипты
   find "$tmp/DEBIAN" -type f \( -name postinst -o -name postrm -o -name preinst -o -name prerm \) -exec chmod 0755 {} +

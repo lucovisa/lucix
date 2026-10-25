@@ -1,0 +1,9 @@
+Package: lucix-grub-theme
+Version: @VERSION@
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: Lucix <lucovisa@users.noreply.github.com>
+Depends: grub-common
+Description: Minecraft world selection GRUB theme
+ GRUB theme by Lxtharia (MIT license), packaged for Lucix.
