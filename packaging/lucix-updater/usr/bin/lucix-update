@@ -19,6 +19,9 @@ RU = os.environ.get("LANG", "").startswith("ru")
 TEXT = {
     "title": ("Lucix Update", "Обновление Lucix"),
     "tab_lucix": ("Lucix", "Lucix"),
+    "tab_apps": ("Apps", "Приложения"),
+    "apps_note": ("Check what you need. Installed apps are marked with a tick. Internet required.", "Отметьте нужное. Установленные помечены галочкой. Нужен интернет."),
+    "apps_install": ("Install selected", "Установить выбранные"),
     "tab_system": ("System", "Система"),
     "tab_drivers": ("Drivers", "Драйверы"),
     "installed": ("Installed version: %s", "Установленная версия: %s"),
@@ -52,6 +55,26 @@ TEXT = {
 
 def t(key):
     return TEXT[key][1 if RU else 0]
+
+
+CATALOG = "/usr/share/lucix/apps.json"
+STATE = "/var/lib/lucix/apps.json"
+
+
+def load_catalog():
+    try:
+        with open(CATALOG, encoding="utf-8") as f:
+            return json.load(f)["apps"]
+    except Exception:
+        return []
+
+
+def read_installed():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return set(json.load(f).get("installed", []))
+    except Exception:
+        return set()
 
 
 def deb_version(tag):
@@ -99,6 +122,7 @@ class Updater(Gtk.Window):
         notebook = Gtk.Notebook()
         root.pack_start(notebook, True, True, 0)
         notebook.append_page(self.build_lucix_tab(), Gtk.Label(label=t("tab_lucix")))
+        notebook.append_page(self.build_apps_tab(), Gtk.Label(label=t("tab_apps")))
         notebook.append_page(self.build_system_tab(), Gtk.Label(label=t("tab_system")))
         notebook.append_page(self.build_drivers_tab(), Gtk.Label(label=t("tab_drivers")))
 
@@ -162,6 +186,48 @@ class Updater(Gtk.Window):
         box.pack_start(self.install_btn, False, False, 0)
         self.busy_widgets += [self.check_btn, self.install_btn]
         return box
+
+    #вкладка приложения
+    def build_apps_tab(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(8)
+        box.pack_start(Gtk.Label(label=t("apps_note"), xalign=0), False, False, 0)
+        self.apps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(200)
+        scroll.add(self.apps_box)
+        box.pack_start(scroll, True, True, 0)
+        btn = Gtk.Button(label=t("apps_install"))
+        btn.connect("clicked", self.install_apps)
+        box.pack_start(btn, False, False, 0)
+        self.busy_widgets.append(btn)
+        self.app_checks = {}
+        self.refresh_apps()
+        return box
+
+    def refresh_apps(self):
+        for child in self.apps_box.get_children():
+            self.apps_box.remove(child)
+        self.app_checks = {}
+        installed = read_installed()
+        idx = 1 if RU else 0
+        for app in load_catalog():
+            label = app["name"][idx]
+            if app["desc"][idx]:
+                label += " - " + app["desc"][idx]
+            if app["id"] in installed:
+                row = Gtk.Label(label="\u2713 " + label, xalign=0)
+            else:
+                row = Gtk.CheckButton(label=label)
+                row.set_active(app.get("default", False))
+                self.app_checks[app["id"]] = row
+            self.apps_box.pack_start(row, False, False, 0)
+        self.apps_box.show_all()
+
+    def install_apps(self, *_):
+        ids = [i for i, c in self.app_checks.items() if c.get_active()]
+        if ids:
+            self.run_helper(["apps-install", ",".join(ids)])
 
     #вкладка система
     def build_system_tab(self):
@@ -334,6 +400,8 @@ class Updater(Gtk.Window):
             self.check_lucix()
         if args[0] in ("drivers-scan", "drivers-install"):
             self.load_drivers()
+        if args[0] == "apps-install":
+            self.refresh_apps()
 
 
 if __name__ == "__main__":

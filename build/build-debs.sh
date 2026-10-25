@@ -13,6 +13,8 @@ mkdir -p "$OUT"
 for pkg in lucix-base lucix-updater; do
   tmp="$(mktemp -d)"
   cp -a "$ROOT_DIR/packaging/$pkg/." "$tmp/"
+  find "$tmp" -name '__pycache__' -prune -exec rm -rf {} +
+  find "$tmp" -name '*.pyc' -delete
   sed -i "s/@VERSION@/$DEB_VERSION/" "$tmp/DEBIAN/control"
 
   #права на скрипты

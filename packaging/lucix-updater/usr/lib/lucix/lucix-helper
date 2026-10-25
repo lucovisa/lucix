@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -15,6 +16,10 @@ PREFIX = "https://github.com/%s/releases/download/" % REPO
 TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9._+~-]{1,128}$")
 APT_OPTS = ["-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+CATALOG = "/usr/share/lucix/apps.json"
+STATE_DIR = "/var/lib/lucix"
+STATE = STATE_DIR + "/apps.json"
+APP_ID_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 ENV = dict(os.environ, DEBIAN_FRONTEND="noninteractive", LC_ALL="C")
 
 
@@ -72,6 +77,167 @@ def sha256_file(path):
 def package_name(path):
     r = subprocess.run(["dpkg-deb", "-f", path, "Package"], capture_output=True, text=True)
     return r.stdout.strip()
+
+
+#каталог и список установленного
+def load_catalog():
+    with open(CATALOG, encoding="utf-8") as f:
+        return {a["id"]: a for a in json.load(f)["apps"]}
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return set(json.load(f).get("installed", []))
+    except Exception:
+        return set()
+
+
+def save_state(ids):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(STATE, "w", encoding="utf-8") as f:
+        json.dump({"installed": sorted(ids)}, f)
+    os.chmod(STATE, 0o644)
+
+
+def apt_install(pkgs):
+    return run(["apt-get"] + APT_OPTS + ["install", "--no-install-recommends"] + list(pkgs)) == 0
+
+
+def ensure_flatpak():
+    if not shutil.which("flatpak") and not apt_install(["flatpak"]):
+        return False
+    return run(["flatpak", "remote-add", "--if-not-exists", "flathub", "https://dl.flathub.org/repo/flathub.flatpakrepo"]) == 0
+
+
+def flatpak_install(ref):
+    if not ensure_flatpak():
+        return False
+    return run(["flatpak", "install", "-y", "--noninteractive", "--system", "flathub", ref]) == 0
+
+
+def github_deb(repo, pattern):
+    rel = get_json("https://api.github.com/repos/%s/releases/latest" % repo)
+    debs = [a for a in rel.get("assets", []) if a["name"].endswith(".deb")]
+    picked = [a for a in debs if re.search(pattern, a["name"], re.I)] or debs
+    if not picked:
+        say("no .deb in the latest release of " + repo)
+        return False
+    asset = picked[0]
+    url = asset["browser_download_url"]
+    if not url.startswith("https://github.com/%s/releases/download/" % repo) or not NAME_RE.match(asset["name"]):
+        say("unexpected asset " + asset["name"])
+        return False
+    work = tempfile.mkdtemp(prefix="lucix-app-")
+    os.chmod(work, 0o755)
+    try:
+        path = os.path.join(work, asset["name"])
+        say("download " + asset["name"])
+        download(url, path)
+        os.chmod(path, 0o644)
+        return run(["apt-get"] + APT_OPTS + ["install", path]) == 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+WINE_TYPES = ["application/x-ms-dos-executable", "application/x-msdownload", "application/x-msi",
+              "application/vnd.microsoft.portable-executable", "application/x-ms-shortcut"]
+WINE_DESKTOP = """[Desktop Entry]
+Type=Application
+Name=Windows Program (Wine)
+Name[ru]=Программа Windows (Wine)
+Exec=wine start /unix %f
+Icon=wine
+Terminal=false
+NoDisplay=true
+MimeType=""" + ";".join(WINE_TYPES) + ";\n"
+
+
+#двойной щелчок по exe и msi
+def post_wine_mime():
+    with open("/usr/share/applications/lucix-wine.desktop", "w", encoding="utf-8") as f:
+        f.write(WINE_DESKTOP)
+    conf = "/etc/xdg/mimeapps.list"
+    lines = []
+    if os.path.exists(conf):
+        with open(conf, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    lines = [l for l in lines if l.split("=", 1)[0] not in WINE_TYPES]
+    if "[Default Applications]" not in lines:
+        lines.append("[Default Applications]")
+    i = lines.index("[Default Applications]") + 1
+    lines[i:i] = ["%s=lucix-wine.desktop;" % t for t in WINE_TYPES]
+    os.makedirs("/etc/xdg", exist_ok=True)
+    with open(conf, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    run(["update-desktop-database", "/usr/share/applications"])
+    return True
+
+
+#права для виртуальных машин
+def post_vm_groups():
+    user = None
+    try:
+        user = pwd.getpwuid(int(os.environ.get("PKEXEC_UID", ""))).pw_name
+    except Exception:
+        pass
+    if user:
+        run(["usermod", "-aG", "libvirt,kvm", user])
+        say("added %s to libvirt and kvm, log out and in again" % user)
+    run(["systemctl", "enable", "--now", "libvirtd"])
+    return True
+
+
+POST = {
+    "wine-mime": post_wine_mime,
+    "vm-groups": post_vm_groups,
+    "flathub": ensure_flatpak,
+    "ufw-enable": lambda: run(["ufw", "--force", "enable"]) == 0,
+}
+
+
+def run_step(step):
+    method = step["method"]
+    if method == "apt":
+        return apt_install(step["packages"])
+    if method == "flatpak":
+        return flatpak_install(step["ref"])
+    if method == "github_deb":
+        return github_deb(step["repo"], step.get("pattern", ""))
+    if method == "post" and step["name"] in POST:
+        return POST[step["name"]]()
+    say("unknown step " + str(step))
+    return False
+
+
+def apps_install(arg):
+    ids = [i for i in arg.split(",") if i]
+    catalog = load_catalog()
+    for i in ids:
+        if not APP_ID_RE.match(i) or i not in catalog:
+            say("unknown app " + i)
+            return 2
+    if run(["apt-get", "update"]) != 0:
+        return 1
+    done = load_state()
+    failed = []
+    for i in ids:
+        app = catalog[i]
+        say("=== " + app["name"][0])
+        try:
+            ok = all(run_step(s) for s in app["steps"])
+        except Exception as e:
+            say("error: %s" % e)
+            ok = False
+        if ok:
+            done.add(i)
+            say("OK " + i)
+        else:
+            failed.append(i)
+            say("FAILED " + i)
+    save_state(done)
+    say("DONE" if not failed else "FAILED: " + ", ".join(failed))
+    return 0 if not failed else 1
 
 
 #обновление lucix из релиза
@@ -132,7 +298,11 @@ def apt_upgrade(snap):
         return 3
     if run(["apt-get", "update"]) != 0:
         return 1
-    return 0 if run(["apt-get"] + APT_OPTS + ["upgrade"]) == 0 else 1
+    if run(["apt-get"] + APT_OPTS + ["upgrade"]) != 0:
+        return 1
+    if shutil.which("flatpak"):
+        run(["flatpak", "update", "-y", "--noninteractive"])
+    return 0
 
 
 def drivers_install(snap):
@@ -163,6 +333,8 @@ def main(argv):
             return lucix_update(argv[2], snap)
         if cmd in ("apt-update", "drivers-scan"):
             return apt_update()
+        if cmd == "apps-install" and len(argv) >= 3:
+            return apps_install(argv[2])
         if cmd == "apt-upgrade":
             return apt_upgrade(snap)
         if cmd == "drivers-install":

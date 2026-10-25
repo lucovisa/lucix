@@ -1,0 +1,302 @@
+{
+ "apps": [
+  {
+   "id": "firefox",
+   "name": [
+    "Firefox",
+    "Firefox"
+   ],
+   "desc": [
+    "web browser",
+    "браузер"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "flatpak",
+     "ref": "org.mozilla.firefox"
+    }
+   ]
+  },
+  {
+   "id": "chrome",
+   "name": [
+    "Google Chrome",
+    "Google Chrome"
+   ],
+   "desc": [
+    "web browser",
+    "браузер"
+   ],
+   "default": false,
+   "steps": [
+    {
+     "method": "flatpak",
+     "ref": "com.google.Chrome"
+    }
+   ]
+  },
+  {
+   "id": "steam",
+   "name": [
+    "Steam",
+    "Steam"
+   ],
+   "desc": [
+    "games",
+    "игры"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "flatpak",
+     "ref": "com.valvesoftware.Steam"
+    }
+   ]
+  },
+  {
+   "id": "discord",
+   "name": [
+    "Discord",
+    "Discord"
+   ],
+   "desc": [
+    "chat",
+    "общение"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "flatpak",
+     "ref": "com.discordapp.Discord"
+    }
+   ]
+  },
+  {
+   "id": "happ",
+   "name": [
+    "Happ",
+    "Happ"
+   ],
+   "desc": [
+    "VPN client",
+    "VPN-клиент"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "github_deb",
+     "repo": "Happ-proxy/happ-desktop",
+     "pattern": "(amd64|x64|x86_64)"
+    }
+   ]
+  },
+  {
+   "id": "wine",
+   "name": [
+    "Windows programs (.exe, .msi)",
+    "Программы Windows (.exe, .msi)"
+   ],
+   "desc": [
+    "Wine, winetricks, Bottles, double click",
+    "Wine, winetricks, Bottles, запуск двойным щелчком"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "wine",
+      "winetricks"
+     ]
+    },
+    {
+     "method": "flatpak",
+     "ref": "com.usebottles.bottles"
+    },
+    {
+     "method": "post",
+     "name": "wine-mime"
+    }
+   ]
+  },
+  {
+   "id": "vm",
+   "name": [
+    "Virtual machines",
+    "Виртуальные машины"
+   ],
+   "desc": [
+    "run any system, Windows too",
+    "любая система, в том числе Windows"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "virt-manager",
+      "qemu-system-x86",
+      "libvirt-daemon-system",
+      "libvirt-clients",
+      "ovmf",
+      "swtpm"
+     ]
+    },
+    {
+     "method": "post",
+     "name": "vm-groups"
+    }
+   ]
+  },
+  {
+   "id": "store",
+   "name": [
+    "App store (Flathub)",
+    "Магазин приложений (Flathub)"
+   ],
+   "desc": [
+    "thousands of apps",
+    "тысячи программ"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "gnome-software",
+      "gnome-software-plugin-flatpak"
+     ]
+    },
+    {
+     "method": "post",
+     "name": "flathub"
+    }
+   ]
+  },
+  {
+   "id": "firewall",
+   "name": [
+    "Firewall",
+    "Файрвол"
+   ],
+   "desc": [
+    "ufw and GUFW, turned on",
+    "ufw и GUFW, сразу включён"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "ufw",
+      "gufw"
+     ]
+    },
+    {
+     "method": "post",
+     "name": "ufw-enable"
+    }
+   ]
+  },
+  {
+   "id": "calculator",
+   "name": [
+    "Calculator",
+    "Калькулятор"
+   ],
+   "desc": [
+    "",
+    ""
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "gnome-calculator"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "paint",
+   "name": [
+    "Pinta",
+    "Pinta"
+   ],
+   "desc": [
+    "simple paint",
+    "простой пейнт"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "pinta"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "screenshot",
+   "name": [
+    "Flameshot",
+    "Flameshot"
+   ],
+   "desc": [
+    "screenshots with notes",
+    "скриншоты с пометками"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "flameshot"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gametools",
+   "name": [
+    "Game tools",
+    "Игровые утилиты"
+   ],
+   "desc": [
+    "GameMode, MangoHud",
+    "GameMode, MangoHud"
+   ],
+   "default": true,
+   "steps": [
+    {
+     "method": "apt",
+     "packages": [
+      "gamemode",
+      "mangohud"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "saves",
+   "name": [
+    "Game saves (Ludusavi)",
+    "Сохранения игр (Ludusavi)"
+   ],
+   "desc": [
+    "backup and move saves from Windows",
+    "перенос сохранений из Windows"
+   ],
+   "default": false,
+   "steps": [
+    {
+     "method": "flatpak",
+     "ref": "com.github.mtkennerly.ludusavi"
+    }
+   ]
+  }
+ ]
+}
