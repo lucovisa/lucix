@@ -106,7 +106,7 @@ def lucix_update(tag, snap):
         paths = []
         for name in debs:
             path = os.path.join(work, name)
-            if sums.get(name) != sha256_file(path):
+            if sha256_file(path) not in sums.values():
                 say("checksum mismatch " + name)
                 return 2
             if not package_name(path).startswith("lucix-"):

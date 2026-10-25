@@ -23,7 +23,7 @@ for pkg in lucix-base lucix-updater; do
   [[ -d "$tmp/etc/skel" ]] && find "$tmp/etc/skel" -type f -name '*.desktop' -exec chmod 0755 {} +
   [[ -f "$tmp/usr/lib/lucix/lucix-helper" ]] && chmod 0755 "$tmp/usr/lib/lucix/lucix-helper"
 
-  dpkg-deb --root-owner-group --build "$tmp" "$OUT/${pkg}_${DEB_VERSION}_all.deb"
+  dpkg-deb --root-owner-group --build "$tmp" "$OUT/${pkg}_${RAW_VERSION}_all.deb"
   rm -rf "$tmp"
 done
 
