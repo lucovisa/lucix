@@ -1,1 +1,2 @@
 /etc/NetworkManager/conf.d/10-globally-managed-devices.conf
+/etc/polkit-1/rules.d/50-lucix-disks.rules

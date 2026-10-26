@@ -1,0 +1,11 @@
+//все диски открываются без пароля для администраторов
+polkit.addRule(function(action, subject) {
+    var ids = [
+        "org.freedesktop.udisks2.filesystem-mount-system",
+        "org.freedesktop.udisks2.filesystem-unmount-others",
+        "org.freedesktop.udisks2.eject-media-system"
+    ];
+    if (ids.indexOf(action.id) >= 0 && subject.local && subject.active && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

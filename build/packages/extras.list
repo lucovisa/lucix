@@ -45,3 +45,8 @@ polkit-gnome
 #usb wifi адаптеры
 usb-modeswitch
 usb-modeswitch-data
+#диски и файловые системы
+udisks2
+gvfs-fuse
+gnome-disk-utility
+exfatprogs

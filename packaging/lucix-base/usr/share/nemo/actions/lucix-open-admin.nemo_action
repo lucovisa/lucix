@@ -1,0 +1,9 @@
+[Nemo Action]
+Name=Open as administrator
+Name[ru]=Открыть от имени администратора
+Comment=Open this folder with administrator rights
+Comment[ru]=Открыть эту папку с правами администратора
+Exec=sh -c 'pkexec env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" nemo --no-desktop "$1"' sh %F
+Icon-Name=dialog-password
+Selection=s
+Extensions=dir;
