@@ -41,9 +41,11 @@ else adapter="не найден в списке usb"; fi
   sudo -n dmesg 2>&1 | grep -iE 'rtw|rtl88|8812|b812|0bda|cfg80211|wlan|firmware' | tail -25
   echo
   echo "=== установщик журнал"
-  for f in /home/*/.cache/calamares/session.log /root/.cache/calamares/session.log; do
-    [ -f "$f" ] && { echo "$f"; grep -n -iE "grub|efi|error|warning" "$f" | tail -n 40; }
-  done
+  sudo -n sh -c 'for f in /home/*/.cache/calamares/session.log /root/.cache/calamares/session.log; do [ -f "$f" ] && { echo "$f"; grep -n -iE "grub|efi|error|warning" "$f" | tail -n 40; cp "$f" /tmp/calamares-session.log; }; done' 2>&1
+  if [ -f /tmp/calamares-session.log ]; then
+    cp /tmp/calamares-session.log "$HOME/calamares-session.log" 2>/dev/null
+    echo "полный журнал скопирован в $HOME/calamares-session.log"
+  fi
   echo
   echo "=== efi"
   if [ -d /sys/firmware/efi ]; then echo "режим uefi"; else echo "режим bios"; fi
