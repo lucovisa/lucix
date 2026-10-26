@@ -40,6 +40,17 @@ else adapter="не найден в списке usb"; fi
   echo "=== dmesg"
   sudo -n dmesg 2>&1 | grep -iE 'rtw|rtl88|8812|b812|0bda|cfg80211|wlan|firmware' | tail -25
   echo
+  echo "=== установщик журнал"
+  for f in /home/*/.cache/calamares/session.log /root/.cache/calamares/session.log; do
+    [ -f "$f" ] && { echo "$f"; grep -n -iE "grub|efi|error|warning" "$f" | tail -n 40; }
+  done
+  echo
+  echo "=== efi"
+  if [ -d /sys/firmware/efi ]; then echo "режим uefi"; else echo "режим bios"; fi
+  sudo -n efibootmgr -v 2>&1 | head -12
+  findmnt -R /target 2>/dev/null | head -12
+  df -h /boot/efi 2>/dev/null
+  echo
   echo "=== службы"
   systemctl is-active NetworkManager wpa_supplicant 2>&1
 } > "$out" 2>&1

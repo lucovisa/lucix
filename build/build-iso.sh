@@ -217,15 +217,15 @@ set timeout=5
 search --no-floppy --set=root --file /casper/vmlinuz
 
 menuentry "${LUCIX_NAME} ${LUCIX_VERSION} (live)" {
-    linux  /casper/vmlinuz boot=casper quiet splash ---
+    linux  /casper/vmlinuz boot=casper noprompt quiet splash ---
     initrd /casper/initrd
 }
 menuentry "${LUCIX_NAME} (live, no splash)" {
-    linux  /casper/vmlinuz boot=casper ---
+    linux  /casper/vmlinuz boot=casper noprompt ---
     initrd /casper/initrd
 }
 menuentry "${LUCIX_NAME} (safe graphics)" {
-    linux  /casper/vmlinuz boot=casper nomodeset ---
+    linux  /casper/vmlinuz boot=casper noprompt nomodeset ---
     initrd /casper/initrd
 }
 EOF

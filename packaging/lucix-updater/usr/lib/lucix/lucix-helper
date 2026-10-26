@@ -319,6 +319,14 @@ def drivers_install(snap):
     return 1
 
 
+def is_live():
+    try:
+        with open("/proc/cmdline") as f:
+            return "boot=casper" in f.read()
+    except Exception:
+        return False
+
+
 def main(argv):
     if os.geteuid() != 0:
         say("must run as root")
@@ -328,6 +336,9 @@ def main(argv):
         return 2
     snap = "--no-snapshot" not in argv
     cmd = argv[1]
+    if cmd in ("apps-install", "apt-upgrade", "drivers-install") and is_live():
+        say("live mode: install Lucix first")
+        return 2
     try:
         if cmd == "lucix-update" and len(argv) >= 3:
             return lucix_update(argv[2], snap)

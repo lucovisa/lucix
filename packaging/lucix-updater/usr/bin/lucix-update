@@ -16,9 +16,21 @@ SHOW_TEST_DEFAULT = True
 
 RU = os.environ.get("LANG", "").startswith("ru")
 
+
+def is_live():
+    try:
+        with open("/proc/cmdline") as f:
+            return "boot=casper" in f.read()
+    except Exception:
+        return False
+
+
+IS_LIVE = is_live()
+
 TEXT = {
     "title": ("Lucix Update", "Обновление Lucix"),
     "tab_lucix": ("Lucix", "Lucix"),
+    "live_note": ("Live mode: install Lucix first, then use this tab.", "Режим live: сначала установите Lucix, потом пользуйтесь этой вкладкой."),
     "tab_apps": ("Apps", "Приложения"),
     "apps_note": ("Check what you need. Installed apps are marked with a tick. Internet required.", "Отметьте нужное. Установленные помечены галочкой. Нужен интернет."),
     "apps_install": ("Install selected", "Установить выбранные"),
@@ -114,6 +126,7 @@ class Updater(Gtk.Window):
         self.set_icon_name("lucix")
         self.releases = []
         self.busy_widgets = []
+        self.live_locked = []
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root.set_border_width(10)
@@ -191,7 +204,7 @@ class Updater(Gtk.Window):
     def build_apps_tab(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.set_border_width(8)
-        box.pack_start(Gtk.Label(label=t("apps_note"), xalign=0), False, False, 0)
+        box.pack_start(Gtk.Label(label=t("live_note") if IS_LIVE else t("apps_note"), xalign=0), False, False, 0)
         self.apps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         scroll = Gtk.ScrolledWindow()
         scroll.set_min_content_height(200)
@@ -201,6 +214,9 @@ class Updater(Gtk.Window):
         btn.connect("clicked", self.install_apps)
         box.pack_start(btn, False, False, 0)
         self.busy_widgets.append(btn)
+        if IS_LIVE:
+            self.live_locked.append(btn)
+            btn.set_sensitive(False)
         self.app_checks = {}
         self.refresh_apps()
         return box
@@ -243,6 +259,9 @@ class Updater(Gtk.Window):
         box.pack_start(check, False, False, 0)
         box.pack_start(upgrade, False, False, 0)
         self.busy_widgets += [check, upgrade]
+        if IS_LIVE:
+            self.live_locked.append(upgrade)
+            upgrade.set_sensitive(False)
         return box
 
     #вкладка драйверы
@@ -264,6 +283,9 @@ class Updater(Gtk.Window):
         btn.connect("clicked", lambda *_: self.run_helper(["drivers-install"]))
         box.pack_start(btn, False, False, 0)
         self.busy_widgets += [scan, btn]
+        if IS_LIVE:
+            self.live_locked.append(btn)
+            btn.set_sensitive(False)
         return box
 
     #журнал
@@ -276,7 +298,7 @@ class Updater(Gtk.Window):
 
     def set_busy(self, busy):
         for w in self.busy_widgets:
-            w.set_sensitive(not busy)
+            w.set_sensitive(not busy and w not in self.live_locked)
 
     def refresh_installed(self):
         self.installed = installed_version()
