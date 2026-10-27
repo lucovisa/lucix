@@ -50,3 +50,5 @@ udisks2
 gvfs-fuse
 gnome-disk-utility
 exfatprogs
+#диагностика
+rfkill
