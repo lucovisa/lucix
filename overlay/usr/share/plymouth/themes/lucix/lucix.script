@@ -6,20 +6,37 @@ Window.SetBackgroundBottomColor(0.078, 0.086, 0.11);
 frames = 72;
 for (i = 0; i < frames; i++) frame[i] = Image("f" + i + ".png");
 logo.sprite = Sprite(frame[0]);
-logo.sprite.SetPosition(Window.GetWidth() / 2 - frame[0].GetWidth() / 2, Window.GetHeight() / 2 - frame[0].GetHeight() / 2, 1);
 tick = 0;
+mode = Plymouth.GetMode();
+divider = 3;
+if (mode == "shutdown") divider = 1;
 
 #подсказка про enter
 hint.image = Image("hint.png");
 hint.sprite = Sprite(hint.image);
-hint.sprite.SetPosition(Window.GetWidth() / 2 - hint.image.GetWidth() / 2, Window.GetHeight() * 0.8, 20);
 hint.sprite.SetOpacity(0);
+
+#центровка: разрешение может смениться после старта темы (например на Full HD), поэтому позиции пересчитываются при каждой смене размера окна
+last_w = 0;
+last_h = 0;
+fun place() {
+  w = Window.GetWidth();
+  h = Window.GetHeight();
+  if (w != last_w || h != last_h) {
+    last_w = w;
+    last_h = h;
+    logo.sprite.SetPosition(w / 2 - frame[0].GetWidth() / 2, h / 2 - frame[0].GetHeight() / 2, 1);
+    hint.sprite.SetPosition(w / 2 - hint.image.GetWidth() / 2, h * 0.8, 20);
+  }
+}
+place();
 
 #вращение и подсказка при выключении
 fun refresh_callback() {
+  place();
   tick++;
-  logo.sprite.SetImage(frame[Math.Int(tick / 3) % frames]);
-  if (Plymouth.GetMode() == "shutdown" && tick > 300) hint.sprite.SetOpacity(1);
+  logo.sprite.SetImage(frame[Math.Int(tick / divider) % frames]);
+  if (mode == "shutdown" && tick > 300) hint.sprite.SetOpacity(1);
 }
 Plymouth.SetRefreshFunction(refresh_callback);
 

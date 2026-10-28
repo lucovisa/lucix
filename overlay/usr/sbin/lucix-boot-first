@@ -1,0 +1,27 @@
+#!/bin/sh
+# Lucix: поставить Lucix первым в порядке загрузки UEFI.
+# Windows остаётся в меню GRUB. Если Windows в меню GRUB нет, порядок не меняем (иначе можно потерять вход в Windows).
+# Ключи: --force (без проверки Windows).
+[ "$(id -u)" -eq 0 ] || { echo "Запусти так: sudo lucix-boot-first"; exit 1; }
+[ -d /sys/firmware/efi ] || { echo "Система загружена не в режиме UEFI, порядок менять нельзя."; exit 1; }
+command -v efibootmgr >/dev/null 2>&1 || { echo "Не найден efibootmgr."; exit 1; }
+cur=$(efibootmgr) || { echo "Не удалось прочитать записи UEFI."; exit 1; }
+num=$(echo "$cur" | grep -iE '^Boot[0-9A-F]{4}\*? lucix' | head -n 1 | cut -c5-8)
+[ -n "$num" ] || { echo "В UEFI нет записи lucix, ставить первой нечего."; exit 1; }
+if [ "$1" != "--force" ] && echo "$cur" | grep -qi 'windows boot manager'; then
+  if ! grep -qi 'windows' /boot/grub/grub.cfg 2>/dev/null; then
+    echo "Windows есть в UEFI, но её нет в меню GRUB. Обновляю меню (update-grub)..."
+    update-grub >/dev/null 2>&1
+    if ! grep -qi 'windows' /boot/grub/grub.cfg 2>/dev/null; then
+      echo "Windows так и не появилась в меню GRUB, порядок загрузки не меняю."
+      echo "Если нужно всё равно: sudo lucix-boot-first --force"
+      exit 2
+    fi
+  fi
+fi
+order=$(echo "$cur" | sed -n 's/^BootOrder: //p')
+rest=$(echo "$order" | tr ',' '\n' | grep -viE "^$num\$" | paste -sd, -)
+new="$num${rest:+,$rest}"
+efibootmgr -o "$new" >/dev/null || { echo "Не удалось записать порядок загрузки."; exit 1; }
+echo "Готово, Lucix теперь первый. Порядок: $new"
+efibootmgr | grep -E '^Boot(Order|Current)'

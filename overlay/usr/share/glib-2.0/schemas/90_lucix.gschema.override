@@ -1,0 +1,13 @@
+[org.cinnamon.desktop.background]
+picture-uri='file:///usr/share/backgrounds/lucix/lucix.jpg'
+picture-options='zoom'
+primary-color='#14161c'
+secondary-color='#14161c'
+
+[org.cinnamon.desktop.interface]
+gtk-theme='Yaru-blue-dark'
+icon-theme='Yaru-blue-dark'
+font-name='Ubuntu 10'
+
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'

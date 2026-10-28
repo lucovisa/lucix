@@ -14,8 +14,8 @@ THEME_DIR="$ROOT_DIR/build/third-party/minegrub"
 
 for pkg in lucix-base lucix-updater lucix-grub-theme; do
   if [[ "$pkg" == "lucix-grub-theme" && ! -d "$THEME_DIR/minegrub-world-selection" ]]; then
-    echo "тема загрузчика не скачана пропускаем $pkg"
-    continue
+    echo "ОШИБКА: тема загрузчика не скачалась, $pkg собрать нельзя (повтори запуск сборки)"
+    exit 1
   fi
   tmp="$(mktemp -d)"
   cp -a "$ROOT_DIR/packaging/$pkg/." "$tmp/"
@@ -27,6 +27,15 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
     cp -a "$ROOT_DIR/overlay/usr/share/plymouth/themes/lucix/." "$tmp/usr/share/plymouth/themes/lucix/"
     [[ -f "$tmp/usr/share/plymouth/themes/lucix/f71.png" ]] || { echo "нет кадров заставки в overlay"; exit 1; }
     grep -q 'frame\[' "$tmp/usr/share/plymouth/themes/lucix/lucix.script" || { echo "в overlay старый lucix.script"; exit 1; }
+    #скрипт порядка загрузки UEFI
+    mkdir -p "$tmp/usr/sbin"
+    cp "$ROOT_DIR/overlay/usr/sbin/lucix-boot-first" "$tmp/usr/sbin/lucix-boot-first"
+    chmod 0755 "$tmp/usr/sbin/lucix-boot-first"
+    #оформление: обои, тема Cinnamon по умолчанию, экран входа
+    mkdir -p "$tmp/usr/share/backgrounds/lucix" "$tmp/usr/share/glib-2.0/schemas" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d"
+    cp "$ROOT_DIR/overlay/usr/share/backgrounds/lucix/lucix.jpg" "$tmp/usr/share/backgrounds/lucix/lucix.jpg"
+    cp "$ROOT_DIR/overlay/usr/share/glib-2.0/schemas/90_lucix.gschema.override" "$tmp/usr/share/glib-2.0/schemas/90_lucix.gschema.override"
+    cp "$ROOT_DIR/overlay/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf"
   fi
   find "$tmp" -name '*.pyc' -delete
   sed -i "s/@VERSION@/$DEB_VERSION/" "$tmp/DEBIAN/control"
@@ -37,6 +46,9 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
     cp -a "$THEME_DIR/minegrub-world-selection" "$tmp/boot/grub/themes/minegrub-world-selection"
     cp "$THEME_DIR/LICENSE" "$tmp/usr/share/doc/lucix-grub-theme/copyright"
     echo "Source: https://github.com/Lxtharia/minegrub-world-sel-theme (MIT)" > "$tmp/usr/share/doc/lucix-grub-theme/SOURCE"
+    #настройки темы последним drop-in, чтобы их не перебили другие файлы grub.d
+    mkdir -p "$tmp/etc/default/grub.d"
+    cp "$ROOT_DIR/overlay/etc/default/grub.d/99-lucix-theme.cfg" "$tmp/etc/default/grub.d/99-lucix-theme.cfg"
   fi
 
   #права на скрипты
