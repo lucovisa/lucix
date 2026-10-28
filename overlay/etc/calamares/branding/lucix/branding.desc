@@ -8,6 +8,10 @@ windowExpanding: normal
 windowSize: 820px,540px
 windowPlacement: center
 
+#панели: слева список разделов, снизу кнопки
+sidebar: widget
+navigation: widget
+
 strings:
   productName: Lucix
   shortProductName: Lucix
@@ -30,6 +34,7 @@ slideshow: "show.qml"
 slideshowAPI: 2
 
 style:
-  sidebarBackground: "#14161c"
-  sidebarText: "#ffffff"
-  sidebarTextSelect: "#8a90a0"
+  SidebarBackground: "#14161c"
+  SidebarText: "#c8ccd8"
+  SidebarTextCurrent: "#ffffff"
+  SidebarBackgroundCurrent: "#2f3545"

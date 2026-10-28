@@ -161,6 +161,14 @@ chroot_run python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sy
   /usr/lib/lucix/lucixdisk.py /usr/lib/lucix/install-launcher.py \
   /usr/lib/x86_64-linux-gnu/calamares/modules/lucixpart/main.py || die "синтаксическая ошибка в файлах автоустановки"
 
+#модуль bootloader требует partition, а авто-режим идёт без него (firmwareType и прочее ставит lucixpart)
+BL_DESC="$CHROOT/usr/lib/x86_64-linux-gnu/calamares/modules/bootloader/module.desc"
+[[ -f "$BL_DESC" ]] || die "нет module.desc у bootloader"
+sed -i '/^requiredModules:/d' "$BL_DESC"
+! grep -q '^requiredModules:' "$BL_DESC" || die "не удалось убрать requiredModules у bootloader"
+chmod +x "$CHROOT/usr/local/sbin/lucix-grub-install"
+[[ -x "$CHROOT/usr/local/sbin/lucix-grub-install" ]] || die "нет lucix-grub-install"
+
 #наши пакеты lucix-base и lucix-updater
 mkdir -p "$CHROOT/tmp/lucix-debs"
 cp "$DEBS_DIR"/*.deb "$CHROOT/tmp/lucix-debs/"
@@ -168,6 +176,9 @@ mapfile -t DEBS < <(cd "$CHROOT/tmp/lucix-debs" && ls ./*.deb | sed 's|^\./|/tmp
 apt_chroot install --no-install-recommends "${DEBS[@]}"
 [[ -f "$CHROOT/etc/lucix-release" ]] || die "lucix-base не отработал нет etc/lucix-release"
 [[ -x "$CHROOT/usr/bin/lucix-update" ]] || die "lucix-updater не установился"
+[[ -f "$CHROOT/usr/share/plymouth/themes/lucix/f71.png" ]] || die "в образе нет кадров заставки"
+grep -q 'frame\[' "$CHROOT/usr/share/plymouth/themes/lucix/lucix.script" || die "в образе старый lucix.script заставки"
+[[ ! -d "$CHROOT/usr/share/plymouth/themes/lucix/themes" ]] || die "в теме заставки осталась вложенная папка themes"
 
 #ярлык установки на рабочем столе
 chmod +x "$CHROOT/usr/share/applications/lucix-install.desktop"

@@ -20,6 +20,14 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
   tmp="$(mktemp -d)"
   cp -a "$ROOT_DIR/packaging/$pkg/." "$tmp/"
   find "$tmp" -name '__pycache__' -prune -exec rm -rf {} +
+  #тема Plymouth: единый источник overlay, старую вложенную папку themes убираем
+  if [[ "$pkg" == "lucix-base" ]]; then
+    mkdir -p "$tmp/usr/share/plymouth/themes/lucix"
+    rm -rf "$tmp/usr/share/plymouth/themes/lucix/themes"
+    cp -a "$ROOT_DIR/overlay/usr/share/plymouth/themes/lucix/." "$tmp/usr/share/plymouth/themes/lucix/"
+    [[ -f "$tmp/usr/share/plymouth/themes/lucix/f71.png" ]] || { echo "нет кадров заставки в overlay"; exit 1; }
+    grep -q 'frame\[' "$tmp/usr/share/plymouth/themes/lucix/lucix.script" || { echo "в overlay старый lucix.script"; exit 1; }
+  fi
   find "$tmp" -name '*.pyc' -delete
   sed -i "s/@VERSION@/$DEB_VERSION/" "$tmp/DEBIAN/control"
 

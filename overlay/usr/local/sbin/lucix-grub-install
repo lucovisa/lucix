@@ -1,0 +1,22 @@
+#!/bin/sh
+# Lucix: обёртка над grub-install для установщика.
+# Пишет подробности в журнал Calamares и при ошибке пробует вариант без записи в NVRAM.
+log() { echo "lucix-grub-install: $*"; }
+log "корень: $(findmnt -n -o SOURCE,FSTYPE / 2>&1)"
+log "ESP: $(findmnt -n -o SOURCE,FSTYPE /boot/efi 2>&1)"
+log "efivars: $(ls /sys/firmware/efi/efivars 2>/dev/null | wc -l) записей"
+grub-install "$@"
+rc=$?
+[ "$rc" -eq 0 ] && exit 0
+log "grub-install вернул $rc, пробую --no-nvram"
+grub-install "$@" --no-nvram
+rc2=$?
+if [ "$rc2" -eq 0 ]; then
+  log "готово без записи в NVRAM, загрузка пойдёт через EFI/BOOT/BOOTX64.EFI"
+  exit 0
+fi
+log "диагностика"
+grep -E ' / | /boot' /proc/self/mountinfo
+ls /dev/disk/by-uuid 2>&1 | head -n 10
+ls /usr/lib/grub/x86_64-efi/modinfo.sh 2>&1
+exit "$rc2"
