@@ -35,7 +35,14 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
     mkdir -p "$tmp/usr/share/backgrounds/lucix" "$tmp/usr/share/glib-2.0/schemas" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d"
     cp "$ROOT_DIR/overlay/usr/share/backgrounds/lucix/lucix.jpg" "$tmp/usr/share/backgrounds/lucix/lucix.jpg"
     cp "$ROOT_DIR/overlay/usr/share/glib-2.0/schemas/90_lucix.gschema.override" "$tmp/usr/share/glib-2.0/schemas/90_lucix.gschema.override"
-    cp "$ROOT_DIR/overlay/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf"
+    cat > "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf" <<'GREETER'
+[greeter]
+background=/usr/share/backgrounds/lucix/lucix.jpg
+user-background=false
+theme-name=Yaru-blue-dark
+icon-theme-name=Yaru-blue-dark
+font-name=Ubuntu 11
+GREETER
   fi
   find "$tmp" -name '*.pyc' -delete
   sed -i "s/@VERSION@/$DEB_VERSION/" "$tmp/DEBIAN/control"
@@ -48,7 +55,13 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
     echo "Source: https://github.com/Lxtharia/minegrub-world-sel-theme (MIT)" > "$tmp/usr/share/doc/lucix-grub-theme/SOURCE"
     #настройки темы последним drop-in, чтобы их не перебили другие файлы grub.d
     mkdir -p "$tmp/etc/default/grub.d"
-    cp "$ROOT_DIR/overlay/etc/default/grub.d/99-lucix-theme.cfg" "$tmp/etc/default/grub.d/99-lucix-theme.cfg"
+    cat > "$tmp/etc/default/grub.d/99-lucix-theme.cfg" <<'GRUBTHEME'
+# Lucix: тема GRUB и показ Windows в меню (читается последней, поэтому другие настройки её не перебьют)
+GRUB_TERMINAL_OUTPUT=gfxterm
+GRUB_GFXMODE=auto
+GRUB_THEME=/boot/grub/themes/minegrub-world-selection/theme.txt
+GRUB_DISABLE_OS_PROBER=false
+GRUBTHEME
   fi
 
   #права на скрипты
