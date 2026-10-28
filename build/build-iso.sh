@@ -155,6 +155,11 @@ cp -a --no-preserve=ownership "$ROOT_DIR/overlay/." "$CHROOT/"
 [[ -x "$CHROOT/usr/bin/calamares" ]] || die "calamares не установился"
 [[ -f "$CHROOT/etc/calamares/settings.conf" ]] || die "нет etc/calamares/settings.conf в overlay"
 [[ -f "$CHROOT/etc/calamares/branding/lucix/branding.desc" ]] || die "нет branding для calamares в overlay"
+[[ -f "$CHROOT/usr/lib/x86_64-linux-gnu/calamares/modules/lucixpart/main.py" ]] || die "нет модуля lucixpart в overlay"
+[[ -x "$CHROOT/usr/bin/zenity" ]] || die "zenity не установился"
+chroot_run python3 -c 'import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' \
+  /usr/lib/lucix/lucixdisk.py /usr/lib/lucix/install-launcher.py \
+  /usr/lib/x86_64-linux-gnu/calamares/modules/lucixpart/main.py || die "синтаксическая ошибка в файлах автоустановки"
 
 #наши пакеты lucix-base и lucix-updater
 mkdir -p "$CHROOT/tmp/lucix-debs"

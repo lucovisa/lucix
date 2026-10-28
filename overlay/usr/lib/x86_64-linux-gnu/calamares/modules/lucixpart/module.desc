@@ -1,0 +1,5 @@
+---
+type:       "job"
+name:       "lucixpart"
+interface:  "python"
+script:     "main.py"

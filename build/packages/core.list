@@ -19,6 +19,7 @@ calamares
 rsync
 parted
 gdisk
+zenity
 dosfstools
 e2fsprogs
 btrfs-progs
