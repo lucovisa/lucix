@@ -1,4 +1,4 @@
-name: Build Lucix ISO
+name: Build Lucix
 
 on:
   #ручной запуск
@@ -8,6 +8,11 @@ on:
         description: "Версия например 2026.10.23-alpha1 или пусто для dev"
         required: false
         default: ""
+      iso:
+        description: "Собрать ISO (долго). Без галочки собираются только пакеты"
+        type: boolean
+        required: false
+        default: false
   #релиз по тегу
   push:
     tags:
@@ -38,12 +43,27 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+      - name: Режим сборки
+        id: mode
+        env:
+          INPUT_ISO: ${{ inputs.iso }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$INPUT_ISO" == "true" ]]; then
+            echo "iso=true" >> "$GITHUB_OUTPUT"
+            echo "Режим: пакеты и ISO"
+          else
+            echo "iso=false" >> "$GITHUB_OUTPUT"
+            echo "Режим: только пакеты"
+          fi
+
       - name: Освобождаем место
+        if: steps.mode.outputs.iso == 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           df -h / /mnt
 
       - name: Ставим инструменты
+        if: steps.mode.outputs.iso == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y debootstrap squashfs-tools xorriso \
@@ -59,14 +79,17 @@ jobs:
         run: bash ./build/build-debs.sh
 
       - name: Собираем ISO
+        if: steps.mode.outputs.iso == 'true'
         env:
           LUCIX_VERSION: ${{ steps.ver.outputs.version }}
         run: sudo -E bash ./build/build-iso.sh
 
       - name: Права на out
+        if: steps.mode.outputs.iso == 'true'
         run: sudo chown -R "$USER" out
 
       - name: Проверяем размер
+        if: steps.mode.outputs.iso == 'true'
         run: |
           ls -lh out/
           size=$(stat -c %s out/*.iso)
@@ -77,6 +100,7 @@ jobs:
           fi
 
       - name: Сохраняем ISO и пакеты
+        if: steps.mode.outputs.iso == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: lucix-iso-${{ steps.ver.outputs.version }}
@@ -88,7 +112,16 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+      - name: Сохраняем пакеты
+        if: steps.mode.outputs.iso != 'true' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lucix-debs-${{ steps.ver.outputs.version }}
+          path: out/debs/*
+          retention-days: 14
+
       - name: Включаем kvm
+        if: steps.mode.outputs.iso == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -96,6 +129,7 @@ jobs:
           ls -l /dev/kvm || echo "kvm нет будет медленный режим"
 
       - name: Тест загрузки в qemu
+        if: steps.mode.outputs.iso == 'true'
         id: boot
         continue-on-error: true
         env:
@@ -103,7 +137,7 @@ jobs:
         run: bash ./build/test-boot.sh out/lucix-*.iso out/test
 
       - name: Сохраняем скриншоты и лог
-        if: always()
+        if: always() && steps.mode.outputs.iso == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: lucix-test-${{ steps.ver.outputs.version }}
@@ -118,8 +152,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/*.iso
-            out/*.sha256
             out/debs/*.deb
             out/debs/SHA256SUMS
           prerelease: ${{ contains(github.ref_name, 'pre') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}

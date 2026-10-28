@@ -1,8 +1,0 @@
-[Plymouth Theme]
-Name=Lucix
-Description=Lucix boot splash
-ModuleName=script
-
-[script]
-ImageDir=/usr/share/plymouth/themes/lucix
-ScriptFile=/usr/share/plymouth/themes/lucix/lucix.script
