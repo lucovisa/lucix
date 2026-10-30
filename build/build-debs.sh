@@ -20,6 +20,115 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
   tmp="$(mktemp -d)"
   cp -a "$ROOT_DIR/packaging/$pkg/." "$tmp/"
   find "$tmp" -name '__pycache__' -prune -exec rm -rf {} +
+  #необязательная установка KDE Plasma из списка приложений (с защитой экрана входа)
+  if [[ "$pkg" == "lucix-updater" ]]; then
+    python3 - "$tmp" <<'PYUPDATER'
+import json, sys
+root = sys.argv[1]
+helper = root + "/usr/lib/lucix/lucix-helper"
+apps = root + "/usr/share/lucix/apps.json"
+
+s = open(helper, encoding="utf-8").read()
+if "post_keep_lightdm" not in s:
+    anchor = "POST = {\n"
+    assert s.count(anchor) == 1, "в хелпере не найден блок POST"
+    funcs = '''#Plasma ставит SDDM, а экран входа оставляем прежний (LightDM)
+def post_snapshot_plasma():
+    try:
+        snapshot("Lucix: before KDE Plasma")
+    except Exception as e:
+        say("snapshot skipped: %s" % e)
+    return True
+
+
+def post_preseed_lightdm():
+    subprocess.run(["debconf-set-selections"], input="shared/default-x-display-manager select lightdm\\n",
+                   text=True, env=ENV)
+    return True
+
+
+def post_keep_lightdm():
+    if os.path.exists("/usr/sbin/lightdm"):
+        with open("/etc/X11/default-display-manager", "w", encoding="utf-8") as f:
+            f.write("/usr/sbin/lightdm\\n")
+        run(["systemctl", "enable", "--force", "lightdm.service"])
+    return True
+
+
+'''
+    s = s.replace(anchor, funcs + anchor + '    "snapshot-plasma": post_snapshot_plasma,\n    "preseed-lightdm": post_preseed_lightdm,\n    "keep-lightdm": post_keep_lightdm,\n')
+    open(helper, "w", encoding="utf-8").write(s)
+
+d = json.load(open(apps, encoding="utf-8"))
+if not any(a.get("id") == "plasma" for a in d["apps"]):
+    d["apps"].append({
+        "id": "plasma",
+        "name": ["KDE Plasma (experimental)", "KDE Plasma (экспериментально)"],
+        "desc": ["Second desktop, about 1 GB. On the login screen pick Plasma (X11). Cinnamon stays",
+                 "Второй рабочий стол, около 1 ГБ. На экране входа выбери сеанс Plasma (X11), Cinnamon остаётся"],
+        "default": False,
+        "steps": [
+            {"method": "post", "name": "snapshot-plasma"},
+            {"method": "post", "name": "preseed-lightdm"},
+            {"method": "apt", "packages": ["kde-plasma-desktop", "plasma-session-x11", "kwin-x11", "spectacle"]},
+            {"method": "post", "name": "keep-lightdm"},
+        ],
+    })
+    json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PYUPDATER
+    #вкладка «Система»: показываем список обновляемых пакетов, а не только их число
+    python3 - "$tmp" <<'PYGUI'
+import sys
+p = sys.argv[1] + "/usr/bin/lucix-update"
+s = open(p, encoding="utf-8").read()
+if "sys_view" not in s:
+    a = "        box.pack_start(self.sys_label, False, False, 0)\n"
+    assert s.count(a) == 1, "в окне не найден sys_label"
+    s = s.replace(a, a + '''        self.sys_view = Gtk.TextView()
+        self.sys_view.set_editable(False)
+        self.sys_view.set_monospace(True)
+        sys_scroll = Gtk.ScrolledWindow()
+        sys_scroll.set_min_content_height(220)
+        sys_scroll.add(self.sys_view)
+        box.pack_start(sys_scroll, True, True, 0)
+''')
+    b = "            GLib.idle_add(self.sys_checked, len(lines))\n"
+    assert s.count(b) == 1, "в окне не найден вызов sys_checked"
+    s = s.replace(b, '''            names = []
+            for l in lines:
+                parts = l.split(" ")
+                names.append("%s  %s" % (parts[0].split("/", 1)[0], parts[1] if len(parts) > 1 else ""))
+            flat = []
+            if shutil.which("flatpak"):
+                try:
+                    fr = subprocess.run(["flatpak", "remote-ls", "--updates", "--columns=name,version"],
+                                        capture_output=True, text=True, timeout=120)
+                    flat = [x.strip() for x in fr.stdout.splitlines() if x.strip()]
+                except Exception:
+                    flat = []
+            listing = ""
+            if names:
+                listing += "Ubuntu:\\n  " + "\\n  ".join(names) + "\\n"
+            if flat:
+                listing += "Flatpak:\\n  " + "\\n  ".join(flat) + "\\n"
+            GLib.idle_add(self.sys_checked, len(names) + len(flat), listing or t("uptodate"))
+''')
+    c = '''    def sys_checked(self, count):
+        self.set_busy(False)
+        self.sys_label.set_text(t("sys_count") % count)
+'''
+    assert s.count(c) == 1, "в окне не найден sys_checked"
+    s = s.replace(c, '''    def sys_checked(self, count, listing=""):
+        self.set_busy(False)
+        self.sys_label.set_text(t("sys_count") % count)
+        self.sys_view.get_buffer().set_text(listing)
+''')
+    if "\nimport shutil" not in s:
+        assert "\nimport subprocess" in s, "нет import subprocess"
+        s = s.replace("\nimport subprocess", "\nimport shutil\nimport subprocess", 1)
+    open(p, "w", encoding="utf-8").write(s)
+PYGUI
+  fi
   #тема Plymouth: единый источник overlay, старую вложенную папку themes убираем
   if [[ "$pkg" == "lucix-base" ]]; then
     mkdir -p "$tmp/usr/share/plymouth/themes/lucix"
@@ -42,6 +151,7 @@ user-background=false
 theme-name=Yaru-blue-dark
 icon-theme-name=Yaru-blue-dark
 font-name=Ubuntu 11
+indicators=~host;~spacer;~clock;~spacer;~layout;~session;~a11y;~power
 GREETER
 
     #рабочий стол: скрипт настроек (курсор, скриншоты, панель по центру, доступ Flatpak), автозапуск и тема панели
@@ -101,7 +211,7 @@ def flatpak():
     if not shutil.which("flatpak"):
         log("flatpak не найден")
         return
-    folders = ("xdg-desktop", "xdg-documents", "xdg-download", "xdg-music",
+    folders = ("home", "xdg-desktop", "xdg-documents", "xdg-download", "xdg-music",
                "xdg-pictures", "xdg-videos", "/media", "/run/media", "/mnt")
     cmd = ["flatpak", "override", "--user"] + ["--filesystem=%s" % f for f in folders]
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -284,14 +394,45 @@ def videos():
     log("xdg-mime rc=%s %s" % (p.returncode, p.stderr.strip()))
 
 
+def lockscreen():
+    """экран блокировки: время крупно, под ним дата помельче (как в Windows)"""
+    schema = "org.cinnamon.desktop.screensaver"
+    for key, val in (
+        ("use-custom-format", "true"),
+        ("time-format", "'%H:%M'"),
+        ("date-format", "'%-d %B %Y'"),
+        ("font-time", "'Ubuntu Light 96'"),
+        ("font-date", "'Ubuntu 22'"),
+    ):
+        gs("set", schema, key, val)
+
+
+def terminal():
+    """в терминале Ctrl+C копирует выделенное (без выделения прерывает программу), Ctrl+V вставляет"""
+    schema = "org.gnome.Terminal.Legacy.Keybindings"
+    gs("set", schema, "copy", "'<Primary>c'")
+    gs("set", schema, "paste", "'<Primary>v'")
+
+
+def desktop_icons():
+    """чистый рабочий стол без значков"""
+    schema = "org.nemo.desktop"
+    for key in ("show-desktop-icons", "computer-icon-visible", "home-icon-visible",
+                "trash-icon-visible", "volumes-visible", "network-icon-visible"):
+        gs("set", schema, key, "false")
+
+
 STEPS = (
-    ("flatpak", 2, flatpak),
+    ("flatpak", 3, flatpak),
     ("screenshots", 1, screenshots),
     ("panel", 1, panel),
     ("theme", 1, theme),
     ("nemo", 1, nemo),
     ("templates", 1, templates),
     ("videos", 1, videos),
+    ("lockscreen", 1, lockscreen),
+    ("terminal", 1, terminal),
+    ("desktop", 1, desktop_icons),
 )
 
 
@@ -685,6 +826,275 @@ Selection=s
 Extensions=zip;tar;gz;tgz;xz;txz;bz2;tbz2;
 Quote=double
 NEMOACTION
+    cat > "$tmp/usr/share/lucix/apply-plasma.py" <<'PLASMAPY'
+#!/usr/bin/env python3
+"""Lucix: первые настройки сеанса KDE Plasma. Запускается только внутри Plasma.
+Каждый шаг выполняется один раз и не трогает то, что ты поменяешь руками."""
+import json
+import os
+import shutil
+import subprocess
+import time
+
+HOME = os.path.expanduser("~")
+MARK = os.path.join(HOME, ".config", "lucix", "plasma-applied")
+LOG = os.path.join(HOME, ".cache", "lucix-plasma.log")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%F %T"), msg))
+    except OSError:
+        pass
+
+
+def run(*cmd):
+    p = subprocess.run(list(cmd), capture_output=True, text=True)
+    log("%s -> rc=%s %s" % (" ".join(cmd), p.returncode, p.stderr.strip()))
+    return p.returncode
+
+
+def focus():
+    """окно из «Показать в папке» выходит на передний план, а не прячется за остальными"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    run("kwriteconfig6", "--file", "kwinrc", "--group", "Windows", "--key", "FocusStealingPreventionLevel", "0")
+    run("dbus-send", "--session", "--dest=org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
+
+
+def wallpaper():
+    if not shutil.which("plasma-apply-wallpaperimage"):
+        return False
+    run("plasma-apply-wallpaperimage", "/usr/share/backgrounds/lucix/lucix.jpg")
+
+
+def colors():
+    if not shutil.which("plasma-apply-colorscheme"):
+        return False
+    run("plasma-apply-colorscheme", "BreezeDark")
+
+
+STEPS = (("focus", 1, focus), ("wallpaper", 1, wallpaper), ("colors", 1, colors))
+
+
+def main():
+    try:
+        with open(MARK, encoding="utf-8") as f:
+            marks = dict(json.load(f))
+    except (OSError, ValueError):
+        marks = {}
+    changed = False
+    for name, version, fn in STEPS:
+        if marks.get(name, 0) >= version:
+            continue
+        try:
+            if fn() is False:
+                continue
+        except Exception as e:
+            log("ошибка в %s: %r" % (name, e))
+            continue
+        marks[name] = version
+        changed = True
+    if changed:
+        os.makedirs(os.path.dirname(MARK), exist_ok=True)
+        with open(MARK, "w", encoding="utf-8") as f:
+            json.dump(marks, f)
+
+
+if __name__ == "__main__":
+    main()
+PLASMAPY
+    cat > "$tmp/etc/xdg/autostart/lucix-apply-plasma.desktop" <<'PLASMAAUTOSTART'
+[Desktop Entry]
+Type=Application
+Name=Lucix Plasma defaults
+Exec=sh -c "sleep 8 && python3 /usr/share/lucix/apply-plasma.py"
+OnlyShowIn=KDE;
+NoDisplay=true
+PLASMAAUTOSTART
+    #переназначение клавиш (keyd): правый Alt как Esc по умолчанию, менять можно через окно «Переназначение клавиш»
+    mkdir -p "$tmp/etc/keyd" "$tmp/usr/share/applications"
+    cat > "$tmp/usr/share/lucix/keys-apply.py" <<'KEYSAPPLY'
+#!/usr/bin/env python3
+"""Lucix: запись переназначений клавиш для keyd. Запускается от root (pkexec) из «Переназначение клавиш».
+Команды: show | set КЛАВИША ЧТО | remove КЛАВИША | reset | reload"""
+import os
+import re
+import subprocess
+import sys
+
+CONF = os.environ.get("LUCIX_KEYD_CONF", "/etc/keyd/default.conf")
+NAME = re.compile(r"^[a-z0-9_+]{1,40}$")
+HEAD = ("# Lucix: переназначение клавиш (keyd).\n"
+        "# Удобнее менять через «Переназначение клавиш» в меню. Вручную: sudo keyd reload после правки.\n"
+        "[ids]\n*\n\n[main]\n")
+
+
+def read_map():
+    maps, in_main = {}, False
+    try:
+        with open(CONF, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return maps
+    for line in lines:
+        s = line.strip()
+        if s.startswith("["):
+            in_main = s == "[main]"
+        elif in_main and "=" in s and not s.startswith("#"):
+            a, b = s.split("=", 1)
+            maps[a.strip()] = b.strip()
+    return maps
+
+
+def reload_keyd():
+    for cmd in (["systemctl", "enable", "--now", "keyd"], ["keyd", "reload"]):
+        try:
+            subprocess.run(cmd, capture_output=True)
+        except OSError:
+            pass
+
+
+def write_map(maps):
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    with open(CONF, "w", encoding="utf-8") as f:
+        f.write(HEAD + "".join("%s = %s\n" % kv for kv in sorted(maps.items())))
+    reload_keyd()
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "show":
+        m = read_map()
+        print("\n".join("%s -> %s" % kv for kv in sorted(m.items())))
+        return 0
+    if cmd == "reload":
+        reload_keyd()
+        return 0
+    if cmd == "reset":
+        write_map({})
+        return 0
+    if cmd == "set" and len(argv) == 4:
+        if not (NAME.match(argv[2]) and NAME.match(argv[3])):
+            print("недопустимое имя клавиши")
+            return 2
+        m = read_map()
+        m[argv[2]] = argv[3]
+        write_map(m)
+        return 0
+    if cmd == "remove" and len(argv) == 3:
+        m = read_map()
+        m.pop(argv[2], None)
+        write_map(m)
+        return 0
+    print("usage: show | set КЛАВИША ЧТО | remove КЛАВИША | reset | reload")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+KEYSAPPLY
+    cat > "$tmp/usr/share/lucix/keys-gui.py" <<'KEYSGUI'
+#!/usr/bin/env python3
+"""Lucix: окно «Переназначение клавиш» (например, чтобы правый Alt работал как Esc)."""
+import os
+import shutil
+import subprocess
+import sys
+
+APPLY = "/usr/share/lucix/keys-apply.py"
+CONF = "/etc/keyd/default.conf"
+TITLE = "--title=Переназначение клавиш"
+
+
+def zen(*args):
+    return subprocess.run(["zenity", TITLE, "--width=520"] + list(args), capture_output=True, text=True)
+
+
+def apply(*args):
+    return subprocess.run(["pkexec", "python3", APPLY] + list(args)).returncode
+
+
+def current():
+    out = subprocess.run(["python3", APPLY, "show"], capture_output=True, text=True).stdout.strip()
+    return out or "(пока ничего не переназначено)"
+
+
+def ask(text):
+    r = zen("--entry", "--text=" + text)
+    return r.stdout.strip().lower() if r.returncode == 0 else ""
+
+
+def main():
+    if not shutil.which("zenity"):
+        print("нужен zenity")
+        return 1
+    if not shutil.which("keyd"):
+        zen("--error", "--text=Не установлен keyd. Он ставится вместе с обновлением Lucix.")
+        return 1
+    r = zen("--list", "--radiolist", "--height=400", "--text=Сейчас переназначено:\n" + current(),
+            "--column=", "--column=Действие", "--column=id", "--hide-column=3", "--print-column=3",
+            "TRUE", "Правый Alt работает как Esc", "rightalt-esc",
+            "FALSE", "Caps Lock работает как Esc", "caps-esc",
+            "FALSE", "Своё переназначение", "custom",
+            "FALSE", "Убрать одно переназначение", "remove",
+            "FALSE", "Сбросить все переназначения", "reset",
+            "FALSE", "Открыть файл настроек вручную", "edit")
+    if r.returncode != 0:
+        return 0
+    choice = r.stdout.strip()
+    ok = True
+    if choice == "rightalt-esc":
+        ok = apply("set", "rightalt", "esc") == 0
+    elif choice == "caps-esc":
+        ok = apply("set", "capslock", "esc") == 0
+    elif choice == "custom":
+        src = ask("Какую клавишу переназначить? Например: rightalt, capslock, rightmeta, rightctrl")
+        dst = ask("Чем она должна быть? Например: esc, leftctrl, enter, backspace") if src else ""
+        if not (src and dst):
+            return 0
+        ok = apply("set", src, dst) == 0
+    elif choice == "remove":
+        src = ask("Какое переназначение убрать? Название клавиши, например: rightalt")
+        if not src:
+            return 0
+        ok = apply("remove", src) == 0
+    elif choice == "reset":
+        ok = apply("reset") == 0
+    elif choice == "edit":
+        subprocess.run(["pkexec", "env", "DISPLAY=" + os.environ.get("DISPLAY", ":0"),
+                        "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""), "xed", CONF])
+        ok = apply("reload") == 0
+    zen("--info", "--text=" + ("Готово. Изменения уже действуют." if ok else "Не получилось применить (отмена или ошибка)."))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+KEYSGUI
+    cat > "$tmp/etc/keyd/default.conf" <<'KEYDCONF'
+# Lucix: переназначение клавиш (keyd).
+# Удобнее менять через «Переназначение клавиш» в меню. Вручную: sudo keyd reload после правки.
+[ids]
+*
+
+[main]
+rightalt = esc
+KEYDCONF
+    sed -i -e '$a\' "$tmp/DEBIAN/conffiles"
+    echo "/etc/keyd/default.conf" >> "$tmp/DEBIAN/conffiles"
+    cat > "$tmp/usr/share/applications/lucix-keys.desktop" <<'KEYSDESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Переназначение клавиш
+Comment=Например, чтобы правый Alt работал как Esc
+Exec=python3 /usr/share/lucix/keys-gui.py
+Icon=input-keyboard
+Categories=Settings;
+Terminal=false
+KEYSDESKTOP
     cat > "$tmp/etc/xdg/autostart/lucix-apply-defaults.desktop" <<'AUTOSTART'
 [Desktop Entry]
 Type=Application
@@ -714,7 +1124,7 @@ AUTOSTART
 }
 THEMECSS
     #рекомендованные пакеты: flameshot (скриншоты), python3-pil (конвертер курсоров), vlc и кодеки (видео mp4), flatpak (приложения из магазина) (если пакета нет, обновление не падает)
-    sed -i 's/^Recommends: .*/&, flameshot, python3-pil, vlc, ffmpegthumbnailer, gstreamer1.0-libav, flatpak/' "$tmp/DEBIAN/control"
+    sed -i 's/^Recommends: .*/&, flameshot, python3-pil, vlc, ffmpegthumbnailer, gstreamer1.0-libav, flatpak, keyd, alsa-utils/' "$tmp/DEBIAN/control"
     grep -q '^Recommends: .*flameshot' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
   fi
   find "$tmp" -name '*.pyc' -delete
