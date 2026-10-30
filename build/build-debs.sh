@@ -28,6 +28,8 @@ root = sys.argv[1]
 helper = root + "/usr/lib/lucix/lucix-helper"
 apps = root + "/usr/share/lucix/apps.json"
 
+REMOVE_FUNCS = '\nLIGHTDM_CONF = "/etc/lightdm/lightdm.conf.d/50-lucix.conf"\n\n\ndef post_remove_cinnamon():\n    """удаляет Cinnamon полностью, но только если Plasma (X11) уже установлена"""\n    if not shutil.which("startplasma-x11"):\n        say("Plasma (X11) не установлена, Cinnamon не трогаю")\n        return False\n    r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Package}\\\\n", "cinnamon*", "muffin*", "nemo*"],\n                       capture_output=True, text=True)\n    pkgs = [l.split()[1] for l in r.stdout.splitlines() if l.startswith("ii ") and len(l.split()) == 2]\n    if not pkgs:\n        say("Cinnamon уже удалён")\n    else:\n        if run(["apt-get"] + APT_OPTS + ["purge"] + pkgs) != 0:\n            return False\n        if run(["apt-get"] + APT_OPTS + ["autoremove", "--purge"]) != 0:\n            return False\n    #сеанс по умолчанию теперь Plasma\n    try:\n        with open(LIGHTDM_CONF, encoding="utf-8") as f:\n            text = f.read()\n        if "user-session=" in text:\n            text = "\\n".join("user-session=plasmax11" if l.startswith("user-session=") else l\n                             for l in text.splitlines()) + "\\n"\n        else:\n            text = text.rstrip("\\n") + "\\nuser-session=plasmax11\\n"\n        with open(LIGHTDM_CONF, "w", encoding="utf-8") as f:\n            f.write(text)\n    except OSError as e:\n        say("не удалось сменить сеанс по умолчанию: %s" % e)\n    return True\n\n'
+
 s = open(helper, encoding="utf-8").read()
 if "post_keep_lightdm" not in s:
     anchor = "POST = {\n"
@@ -59,6 +61,14 @@ def post_keep_lightdm():
     s = s.replace(anchor, funcs + anchor + '    "snapshot-plasma": post_snapshot_plasma,\n    "preseed-lightdm": post_preseed_lightdm,\n    "keep-lightdm": post_keep_lightdm,\n')
     open(helper, "w", encoding="utf-8").write(s)
 
+if "post_remove_cinnamon" not in open(helper, encoding="utf-8").read():
+    s = open(helper, encoding="utf-8").read()
+    anchor2 = '    "keep-lightdm": post_keep_lightdm,\n'
+    assert s.count(anchor2) == 1, "в хелпере не найден keep-lightdm"
+    s = s.replace("POST = {\n", REMOVE_FUNCS + "POST = {\n", 1)
+    s = s.replace(anchor2, anchor2 + '    "remove-cinnamon": post_remove_cinnamon,\n')
+    open(helper, "w", encoding="utf-8").write(s)
+
 d = json.load(open(apps, encoding="utf-8"))
 if not any(a.get("id") == "plasma" for a in d["apps"]):
     d["apps"].append({
@@ -74,7 +84,22 @@ if not any(a.get("id") == "plasma" for a in d["apps"]):
             {"method": "post", "name": "keep-lightdm"},
         ],
     })
-    json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    pass
+
+if not any(a.get("id") == "remove-cinnamon" for a in d["apps"]):
+    d["apps"].append({
+        "id": "remove-cinnamon",
+        "name": ["Remove Cinnamon (Plasma only)", "Удалить Cinnamon (останется только Plasma)"],
+        "desc": ["ONLY from a Plasma session and only after checking that Plasma works. Removes Cinnamon completely",
+                 "ТОЛЬКО из сеанса Plasma и только когда убедился, что она работает. Cinnamon удаляется полностью"],
+        "default": False,
+        "steps": [
+            {"method": "post", "name": "snapshot-plasma"},
+            {"method": "post", "name": "remove-cinnamon"},
+        ],
+    })
+
+json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYUPDATER
     #вкладка «Система»: показываем список обновляемых пакетов, а не только их число
     python3 - "$tmp" <<'PYGUI'
@@ -140,351 +165,24 @@ PYGUI
     mkdir -p "$tmp/usr/sbin"
     cp "$ROOT_DIR/overlay/usr/sbin/lucix-boot-first" "$tmp/usr/sbin/lucix-boot-first"
     chmod 0755 "$tmp/usr/sbin/lucix-boot-first"
-    #оформление: обои, тема Cinnamon по умолчанию, экран входа
-    mkdir -p "$tmp/usr/share/backgrounds/lucix" "$tmp/usr/share/glib-2.0/schemas" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d"
+    #оформление: обои и экран входа
+    mkdir -p "$tmp/usr/share/backgrounds/lucix" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d"
     cp "$ROOT_DIR/overlay/usr/share/backgrounds/lucix/lucix.jpg" "$tmp/usr/share/backgrounds/lucix/lucix.jpg"
-    cp "$ROOT_DIR/overlay/usr/share/glib-2.0/schemas/90_lucix.gschema.override" "$tmp/usr/share/glib-2.0/schemas/90_lucix.gschema.override"
     cat > "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf" <<'GREETER'
 [greeter]
 background=/usr/share/backgrounds/lucix/lucix.jpg
 user-background=false
-theme-name=Yaru-blue-dark
-icon-theme-name=Yaru-blue-dark
+theme-name=Breeze-Dark
+icon-theme-name=breeze-dark
 font-name=Ubuntu 11
 indicators=~host;~spacer;~clock;~spacer;~layout;~session;~a11y;~power
 GREETER
 
-    #рабочий стол: скрипт настроек (курсор, скриншоты, панель по центру, доступ Flatpak), автозапуск и тема панели
-    mkdir -p "$tmp/usr/share/lucix" "$tmp/etc/xdg/autostart" "$tmp/usr/share/themes/Lucix/cinnamon"
+    #рабочий стол Plasma: скрипт настроек и автозапуск
+    mkdir -p "$tmp/usr/share/lucix" "$tmp/etc/xdg/autostart"
     #каталог экспорта Flatpak должен существовать к моменту входа, иначе значки новых приложений видны только после перезахода
     mkdir -p "$tmp/var/lib/flatpak/exports/share"
-    cat > "$tmp/usr/share/lucix/apply-defaults.py" <<'APPLYPY'
-#!/usr/bin/env python3
-"""Lucix: применяет настройки рабочего стола. У каждого шага своя версия: шаг выполняется один раз,
-и повторно только если его версию подняли (так обновление не перетирает то, что ты поменял руками).
-Скриншоты как в Windows, панель по центру, доступ Flatpak к папкам, проводник и видео."""
-import ast
-import json
-import os
-import shutil
-import subprocess
-import time
-
-HOME = os.path.expanduser("~")
-MARK = os.path.join(HOME, ".config", "lucix", "defaults-applied")
-LOG = os.path.join(HOME, ".cache", "lucix-defaults.log")
-
-
-def log(msg):
-    try:
-        os.makedirs(os.path.dirname(LOG), exist_ok=True)
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write("%s %s\n" % (time.strftime("%F %T"), msg))
-    except OSError:
-        pass
-
-
-def q(s):
-    return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
-
-
-def gs(*args):
-    p = subprocess.run(["gsettings"] + list(args), capture_output=True, text=True)
-    if p.returncode != 0:
-        log("gsettings %s -> %s" % (" ".join(args), p.stderr.strip()))
-    return p.returncode, p.stdout.strip()
-
-
-def gs_list(schema, key):
-    rc, out = gs("get", schema, key)
-    if rc != 0:
-        return None
-    if out.startswith("@as"):
-        out = out[3:].strip()
-    try:
-        return list(ast.literal_eval(out))
-    except (ValueError, SyntaxError):
-        return None
-
-
-def flatpak():
-    if not shutil.which("flatpak"):
-        log("flatpak не найден")
-        return
-    folders = ("home", "xdg-desktop", "xdg-documents", "xdg-download", "xdg-music",
-               "xdg-pictures", "xdg-videos", "/media", "/run/media", "/mnt")
-    cmd = ["flatpak", "override", "--user"] + ["--filesystem=%s" % f for f in folders]
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    log("flatpak override rc=%s %s" % (p.returncode, p.stderr.strip()))
-    #отдельным вызовом: Flatpak-приложения должны видеть установленные пользователем курсоры
-    cmd = ["flatpak", "override", "--user", "--filesystem=xdg-data/icons:ro", "--filesystem=~/.icons:ro"]
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    log("flatpak override (курсоры) rc=%s %s" % (p.returncode, p.stderr.strip()))
-    #без этого каталога значки пользовательских Flatpak-приложений видны только после перезахода
-    os.makedirs(os.path.join(HOME, ".local", "share", "flatpak", "exports", "share"), exist_ok=True)
-
-
-def ini_set(path, section, values):
-    """меняет только нужные ключи в ini, остальное (в т.ч. кнопки Flameshot) не трогает"""
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        lines = []
-    head = "[%s]" % section
-    start = next((i for i, l in enumerate(lines) if l.strip() == head), None)
-    if start is None:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.append(head)
-        lines += ["%s=%s" % kv for kv in values.items()]
-    else:
-        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
-        for k, v in values.items():
-            for i in range(start + 1, end):
-                if lines[i].split("=", 1)[0].strip() == k:
-                    lines[i] = "%s=%s" % (k, v)
-                    break
-            else:
-                lines.insert(start + 1, "%s=%s" % (k, v))
-                end += 1
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-
-
-def flameshot_config():
-    ini_set(os.path.join(HOME, ".config", "flameshot", "flameshot.ini"), "General", {
-        "showHelp": "false",
-        "showStartupLaunchMessage": "false",
-        "showDesktopNotification": "false",
-        "disabledTrayIcon": "true",
-    })
-
-
-def region_command():
-    """как в Windows: выделил область и она сразу в буфере (если эта версия Flameshot умеет)"""
-    try:
-        p = subprocess.run(["flameshot", "gui", "--help"], capture_output=True, text=True, timeout=10)
-        text = p.stdout + p.stderr
-    except Exception:
-        text = ""
-    if "accept-on-select" in text:
-        return "flameshot gui --accept-on-select -c"
-    log("эта версия Flameshot без --accept-on-select, область копируется по Enter")
-    return "flameshot gui -c"
-
-
-KB = "org.cinnamon.desktop.keybindings"
-KB_ITEM = KB + ".custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/%s/"
-
-
-def screenshots():
-    if not shutil.which("flameshot"):
-        log("flameshot не установлен, скриншоты настрою позже")
-        return False
-    items = (
-        ("lucix-shot", "Скриншот области", region_command(), ["<Shift><Super>s", "Print"]),
-        ("lucix-shot-full", "Скриншот всего экрана", "flameshot full -c", ["<Control>Print"]),
-    )
-    flameshot_config()
-    for key in ("screenshot", "screenshot-clip"):
-        gs("set", KB + ".media-keys", key, "[]")
-    lst = gs_list(KB, "custom-list") or []
-    lst = [x for x in lst if x != "__dummy__"]
-    for ident, name, cmd, binding in items:
-        schema = KB_ITEM % ident
-        gs("set", schema, "name", q(name))
-        gs("set", schema, "command", q(cmd))
-        gs("set", schema, "binding", str(binding))
-        if ident not in lst:
-            lst.append(ident)
-    gs("set", KB, "custom-list", str(lst))
-
-
-CENTER = ["menu@cinnamon.org", "panel-launchers@cinnamon.org", "grouped-window-list@cinnamon.org"]
-
-
-def panel():
-    lst = gs_list("org.cinnamon", "enabled-applets")
-    if not lst:
-        log("список апплетов не прочитан")
-        return
-    rows = []
-    for e in lst:
-        p = e.split(":")
-        if len(p) < 5:
-            log("странная запись апплета %s, панель не трогаю" % e)
-            return
-        rows.append({"panel": p[0], "zone": p[1], "order": int(p[2]) if p[2].isdigit() else 0,
-                     "uuid": p[3], "inst": ":".join(p[4:])})
-    target = None
-    for uuid in ("grouped-window-list@cinnamon.org", "menu@cinnamon.org", "panel-launchers@cinnamon.org"):
-        for r in rows:
-            if r["uuid"] == uuid:
-                target = r["panel"]
-                break
-        if target:
-            break
-    if not target:
-        log("на панели нет меню и списка окон, не трогаю")
-        return
-    for r in rows:
-        if r["panel"] == target and r["uuid"] in CENTER:
-            r["zone"] = "center"
-
-    def sort_key(r):
-        if r["panel"] == target and r["zone"] == "center" and r["uuid"] in CENTER:
-            return (CENTER.index(r["uuid"]), r["order"])
-        return (0, r["order"])
-
-    out, groups = [], {}
-    for r in rows:
-        groups.setdefault((r["panel"], r["zone"]), []).append(r)
-    for (pn, zone), items in groups.items():
-        for i, r in enumerate(sorted(items, key=sort_key)):
-            out.append("%s:%s:%d:%s:%s" % (pn, zone, i, r["uuid"], r["inst"]))
-    gs("set", "org.cinnamon", "enabled-applets", str(out))
-
-
-def theme():
-    if os.path.isfile("/usr/share/themes/Lucix/cinnamon/cinnamon.css"):
-        gs("set", "org.cinnamon.theme", "name", q("Lucix"))
-
-
-def nemo():
-    """проводник ближе к Windows: подробный список, дерево папок слева, полный путь, сначала папки"""
-    values = (
-        ("org.nemo.preferences", "default-folder-viewer", "'list-view'"),
-        ("org.nemo.preferences", "ignore-view-metadata", "true"),
-        ("org.nemo.preferences", "sort-directories-first", "true"),
-        ("org.nemo.preferences", "show-full-path-titles", "true"),
-        ("org.nemo.preferences", "date-format", "'iso'"),
-        ("org.nemo.window-state", "start-with-sidebar", "true"),
-        ("org.nemo.window-state", "side-pane-view", "'tree'"),
-        ("org.nemo.window-state", "start-with-toolbar", "true"),
-        ("org.nemo.window-state", "start-with-status-bar", "true"),
-        ("org.nemo.list-view", "default-visible-columns", "['name', 'date_modified', 'type', 'size']"),
-    )
-    for schema, key, val in values:
-        gs("set", schema, key, val)
-
-
-def templates():
-    """правый клик, Создать документ, Текстовый документ (как «Создать» в Windows)"""
-    p = subprocess.run(["xdg-user-dir", "TEMPLATES"], capture_output=True, text=True)
-    d = p.stdout.strip()
-    if not d or d == HOME:
-        d = os.path.join(HOME, "Templates")
-    os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, "Текстовый документ.txt")
-    if not os.path.exists(path):
-        open(path, "w").close()
-
-
-VIDEO_MIMES = ("video/mp4", "video/x-matroska", "video/webm", "video/x-msvideo", "video/quicktime",
-               "video/mpeg", "video/x-flv", "video/ogg", "video/3gpp")
-
-
-def videos():
-    if not os.path.isfile("/usr/share/applications/vlc.desktop"):
-        log("VLC ещё не установлен, видео по умолчанию настрою позже")
-        return False
-    p = subprocess.run(["xdg-mime", "default", "vlc.desktop"] + list(VIDEO_MIMES), capture_output=True, text=True)
-    log("xdg-mime rc=%s %s" % (p.returncode, p.stderr.strip()))
-
-
-def lockscreen():
-    """экран блокировки: время крупно, под ним дата помельче (как в Windows)"""
-    schema = "org.cinnamon.desktop.screensaver"
-    for key, val in (
-        ("use-custom-format", "true"),
-        ("time-format", "'%H:%M'"),
-        ("date-format", "'%-d %B %Y'"),
-        ("font-time", "'Ubuntu Light 96'"),
-        ("font-date", "'Ubuntu 22'"),
-    ):
-        gs("set", schema, key, val)
-
-
-def terminal():
-    """в терминале Ctrl+C копирует выделенное (без выделения прерывает программу), Ctrl+V вставляет"""
-    schema = "org.gnome.Terminal.Legacy.Keybindings"
-    gs("set", schema, "copy", "'<Primary>c'")
-    gs("set", schema, "paste", "'<Primary>v'")
-
-
-def desktop_icons():
-    """чистый рабочий стол без значков"""
-    schema = "org.nemo.desktop"
-    for key in ("show-desktop-icons", "computer-icon-visible", "home-icon-visible",
-                "trash-icon-visible", "volumes-visible", "network-icon-visible"):
-        gs("set", schema, key, "false")
-
-
-STEPS = (
-    ("flatpak", 3, flatpak),
-    ("screenshots", 1, screenshots),
-    ("panel", 1, panel),
-    ("theme", 1, theme),
-    ("nemo", 1, nemo),
-    ("templates", 1, templates),
-    ("videos", 1, videos),
-    ("lockscreen", 1, lockscreen),
-    ("terminal", 1, terminal),
-    ("desktop", 1, desktop_icons),
-)
-
-
-def load_marks():
-    try:
-        with open(MARK, encoding="utf-8") as f:
-            raw = f.read().strip()
-    except OSError:
-        return {}
-    if raw.startswith("{"):
-        try:
-            return dict(json.loads(raw))
-        except ValueError:
-            return {}
-    if raw.isdigit():  # старый формат: одна цифра на всё
-        n = int(raw)
-        marks = {}
-        if n >= 2:
-            marks.update(flatpak=1, panel=1, theme=1)
-        marks["screenshots"] = 1 if n >= 3 else 0
-        return marks
-    return {}
-
-
-def main():
-    marks = load_marks()
-    changed = False
-    for name, version, fn in STEPS:
-        if marks.get(name, 0) >= version:
-            continue
-        log("шаг %s версии %s" % (name, version))
-        try:
-            if fn() is False:
-                continue  # сейчас нельзя, повторим при следующем входе
-        except Exception as e:
-            log("ошибка в %s: %r" % (name, e))
-            continue
-        marks[name] = version
-        changed = True
-    if not changed:
-        return
-    os.makedirs(os.path.dirname(MARK), exist_ok=True)
-    with open(MARK, "w", encoding="utf-8") as f:
-        json.dump(marks, f)
-    if shutil.which("notify-send"):
-        subprocess.run(["notify-send", "Lucix", "Настройки рабочего стола обновлены"])
-
-
-if __name__ == "__main__":
-    main()
-APPLYPY
-    mkdir -p "$tmp/usr/share/nemo/actions"
+    mkdir -p "$tmp/usr/share/kio/servicemenus"
     cat > "$tmp/usr/share/lucix/install-cursor.py" <<'CURSORPY'
 #!/usr/bin/env python3
 """Lucix: установка курсора мыши из архива (zip, tar.gz, tar.xz, tar.bz2).
@@ -557,8 +255,10 @@ def ask_apply(name):
 
 
 def apply_theme(name):
-    for schema in ("org.cinnamon.desktop.interface", "org.gnome.desktop.interface"):
-        subprocess.run(["gsettings", "set", schema, "cursor-theme", "'%s'" % name.replace("'", "")])
+    if shutil.which("plasma-apply-cursortheme"):
+        subprocess.run(["plasma-apply-cursortheme", name])
+    if shutil.which("gsettings"):  # для GTK-приложений
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", "'%s'" % name.replace("'", "")])
 
 
 def find_linux_themes(root):
@@ -816,20 +516,35 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 CURSORPY
-    cat > "$tmp/usr/share/nemo/actions/lucix-install-cursor.nemo_action" <<'NEMOACTION'
-[Nemo Action]
+    cat > "$tmp/usr/share/kio/servicemenus/lucix-install-cursor.desktop" <<'DOLPHINCURSOR'
+[Desktop Entry]
+Type=Service
+MimeType=application/zip;application/x-compressed-tar;application/x-xz-compressed-tar;application/x-bzip-compressed-tar;application/gzip;application/x-tar;
+Actions=lucixCursor
+X-KDE-Priority=TopLevel
+
+[Desktop Action lucixCursor]
 Name=Установить как курсор мыши
-Comment=Установить набор курсоров из архива
-Exec=python3 /usr/share/lucix/install-cursor.py %F
-Icon-Name=input-mouse
-Selection=s
-Extensions=zip;tar;gz;tgz;xz;txz;bz2;tbz2;
-Quote=double
-NEMOACTION
+Icon=input-mouse
+Exec=python3 /usr/share/lucix/install-cursor.py %f
+DOLPHINCURSOR
+    cat > "$tmp/usr/share/kio/servicemenus/lucix-open-admin.desktop" <<'DOLPHINADMIN'
+[Desktop Entry]
+Type=Service
+MimeType=inode/directory;
+Actions=lucixAdmin
+X-KDE-Priority=TopLevel
+
+[Desktop Action lucixAdmin]
+Name=Открыть от имени администратора
+Icon=dialog-password
+Exec=sh -c 'pkexec env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" dolphin --new-window "$1"' sh %f
+DOLPHINADMIN
     cat > "$tmp/usr/share/lucix/apply-plasma.py" <<'PLASMAPY'
 #!/usr/bin/env python3
-"""Lucix: первые настройки сеанса KDE Plasma. Запускается только внутри Plasma.
-Каждый шаг выполняется один раз и не трогает то, что ты поменяешь руками."""
+"""Lucix: настройки сеанса KDE Plasma. Запускается только внутри Plasma.
+У каждого шага своя версия: он выполняется один раз и не трогает то, что ты поменяешь руками.
+Шаг, который сейчас сделать нельзя, повторяется при следующем входе."""
 import json
 import os
 import shutil
@@ -850,10 +565,26 @@ def log(msg):
         pass
 
 
-def run(*cmd):
-    p = subprocess.run(list(cmd), capture_output=True, text=True)
+def run(*cmd, timeout=60):
+    try:
+        p = subprocess.run(list(cmd), capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("%s -> %r" % (" ".join(cmd), e))
+        return 1
     log("%s -> rc=%s %s" % (" ".join(cmd), p.returncode, p.stderr.strip()))
     return p.returncode
+
+
+def flatpak():
+    """браузеру и остальным Flatpak-приложениям: домашняя папка, диски и свои курсоры"""
+    if not shutil.which("flatpak"):
+        log("flatpak не найден, настрою позже")
+        return False
+    folders = ("home", "/media", "/run/media", "/mnt")
+    run("flatpak", "override", "--user", *["--filesystem=%s" % f for f in folders])
+    run("flatpak", "override", "--user", "--filesystem=xdg-data/icons:ro", "--filesystem=~/.icons:ro")
+    #без этого каталога значки пользовательских Flatpak-приложений видны только после перезахода
+    os.makedirs(os.path.join(HOME, ".local", "share", "flatpak", "exports", "share"), exist_ok=True)
 
 
 def focus():
@@ -867,16 +598,75 @@ def focus():
 def wallpaper():
     if not shutil.which("plasma-apply-wallpaperimage"):
         return False
-    run("plasma-apply-wallpaperimage", "/usr/share/backgrounds/lucix/lucix.jpg")
+    if run("plasma-apply-wallpaperimage", "/usr/share/backgrounds/lucix/lucix.jpg") != 0:
+        return False
 
 
 def colors():
     if not shutil.which("plasma-apply-colorscheme"):
         return False
-    run("plasma-apply-colorscheme", "BreezeDark")
+    if run("plasma-apply-colorscheme", "BreezeDark") != 0:
+        return False
 
 
-STEPS = (("focus", 1, focus), ("wallpaper", 1, wallpaper), ("colors", 1, colors))
+def kickoff():
+    """значок Lucix на кнопке меню приложений"""
+    if not shutil.which("dbus-send"):
+        return False
+    js = ('var n = 0; var ps = panels(); for (var i = 0; i < ps.length; i++) {'
+          ' var ws = ps[i].widgets("org.kde.plasma.kickoff");'
+          ' for (var j = 0; j < ws.length; j++) { ws[j].currentConfigGroup = ["General"];'
+          ' ws[j].writeConfig("icon", "lucix"); ws[j].reloadConfig(); n++; } } n;')
+    if run("dbus-send", "--session", "--print-reply", "--dest=org.kde.plasmashell", "/PlasmaShell",
+           "org.kde.PlasmaShell.evaluateScript", "string:" + js) != 0:
+        return False
+
+
+def screenshot():
+    """Win+Shift+S: выделил область, и она сразу в буфере обмена (Ctrl+V вставляет)"""
+    if not (shutil.which("spectacle") and shutil.which("kwriteconfig6")):
+        return False
+    try:
+        p = subprocess.run(["spectacle", "--help"], capture_output=True, text=True, timeout=30)
+        text = p.stdout + p.stderr
+    except (OSError, subprocess.TimeoutExpired):
+        text = ""
+    flag = "--copy-image" if "--copy-image" in text else ("--clipboard" if "--clipboard" in text else "")
+    cmd = "spectacle --background --region" + (" " + flag if flag else "")
+    if not flag:
+        log("spectacle без ключа копирования в буфер, область откроется в окне Spectacle")
+        cmd = "spectacle --region"
+    d = os.path.join(HOME, ".local", "share", "applications")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "lucix-screenshot.desktop"), "w", encoding="utf-8") as f:
+        f.write("[Desktop Entry]\nType=Application\nName=Скриншот области\nExec=%s\nIcon=spectacle\nNoDisplay=true\n" % cmd)
+    if shutil.which("kbuildsycoca6"):
+        run("kbuildsycoca6")
+    run("kwriteconfig6", "--file", "kglobalshortcutsrc", "--group", "services",
+        "--group", "lucix-screenshot.desktop", "--key", "_launch", "Meta+Shift+S")
+    run("systemctl", "--user", "restart", "plasma-kglobalaccel.service")
+
+
+VIDEO_MIMES = ("video/mp4", "video/x-matroska", "video/webm", "video/x-msvideo", "video/quicktime",
+               "video/mpeg", "video/x-flv", "video/ogg", "video/3gpp")
+
+
+def videos():
+    if not os.path.isfile("/usr/share/applications/vlc.desktop"):
+        log("VLC ещё не установлен, видео по умолчанию настрою позже")
+        return False
+    run("xdg-mime", "default", "vlc.desktop", *VIDEO_MIMES)
+
+
+STEPS = (
+    ("flatpak", 1, flatpak),
+    ("focus", 1, focus),
+    ("wallpaper", 1, wallpaper),
+    ("colors", 1, colors),
+    ("kickoff", 1, kickoff),
+    ("screenshot", 1, screenshot),
+    ("videos", 1, videos),
+)
 
 
 def main():
@@ -889,6 +679,7 @@ def main():
     for name, version, fn in STEPS:
         if marks.get(name, 0) >= version:
             continue
+        log("шаг %s версии %s" % (name, version))
         try:
             if fn() is False:
                 continue
@@ -1095,37 +886,11 @@ Icon=input-keyboard
 Categories=Settings;
 Terminal=false
 KEYSDESKTOP
-    cat > "$tmp/etc/xdg/autostart/lucix-apply-defaults.desktop" <<'AUTOSTART'
-[Desktop Entry]
-Type=Application
-Name=Lucix desktop defaults
-Exec=python3 /usr/share/lucix/apply-defaults.py
-X-GNOME-Autostart-Delay=5
-OnlyShowIn=X-Cinnamon;
-NoDisplay=true
-AUTOSTART
-    cat > "$tmp/usr/share/themes/Lucix/cinnamon/cinnamon.css" <<'THEMECSS'
-/* Lucix: стандартная тема Cinnamon, но панель прозрачная, а центр панели тёмная плашка */
-@import url("/usr/share/cinnamon/theme/cinnamon.css");
-
-#panel, .panel-top, .panel-bottom, .panel-left, .panel-right {
-  background-color: transparent;
-  background-gradient-start: transparent;
-  background-gradient-end: transparent;
-  border-width: 0px;
-  box-shadow: none;
-}
-
-#panelCenter {
-  background-color: rgba(20, 22, 28, 0.80);
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  padding: 0px 10px;
-}
-THEMECSS
-    #рекомендованные пакеты: flameshot (скриншоты), python3-pil (конвертер курсоров), vlc и кодеки (видео mp4), flatpak (приложения из магазина) (если пакета нет, обновление не падает)
-    sed -i 's/^Recommends: .*/&, flameshot, python3-pil, vlc, ffmpegthumbnailer, gstreamer1.0-libav, flatpak, keyd, alsa-utils/' "$tmp/DEBIAN/control"
-    grep -q '^Recommends: .*flameshot' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
+    #рекомендованные пакеты: python3-pil (конвертер курсоров), vlc и кодеки (видео mp4), flatpak (приложения из магазина), keyd (клавиши)
+    sed -i 's/^Recommends: .*/&, python3-pil, vlc, ffmpegthumbnailer, gstreamer1.0-libav, flatpak, keyd, alsa-utils/' "$tmp/DEBIAN/control"
+    grep -q '^Recommends: .*keyd' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
+    #в проекте только Plasma: старые файлы Nemo из packaging в пакет не попадают
+    rm -rf "$tmp/usr/share/nemo"
   fi
   find "$tmp" -name '*.pyc' -delete
   sed -i "s/@VERSION@/$DEB_VERSION/" "$tmp/DEBIAN/control"
@@ -1158,6 +923,72 @@ GRUBTHEME
   dpkg-deb --root-owner-group --build "$tmp" "$OUT/${pkg}_${RAW_VERSION}_all.deb"
   rm -rf "$tmp"
 done
+
+#пакет брендинга: название Lucix вместо Ubuntu, восстанавливается после обновления base-files
+br="$(mktemp -d)"
+mkdir -p "$br/DEBIAN" "$br/usr/share/lucix"
+cat > "$br/DEBIAN/control" <<BRCONTROL
+Package: lucix-branding
+Version: $DEB_VERSION
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: Lucix <lucovisa@users.noreply.github.com>
+Depends: lucix-base
+Description: Lucix product names
+ Replaces the visible Ubuntu names with Lucix (os-release, issue, lsb-release).
+BRCONTROL
+cat > "$br/usr/share/lucix/apply-branding.sh" <<'BRSH'
+#!/bin/sh
+# Lucix: фирменные названия вместо Ubuntu.
+# Запускается при установке и каждый раз, когда обновление base-files переписывает файлы с названием системы.
+ROOT="${LUCIX_ROOT:-}"
+VER="${LUCIX_VER:-$(dpkg-query -W -f='${Version}' lucix-base 2>/dev/null || echo unknown)}"
+REPO="https://github.com/lucovisa/lucix"
+
+setkv() {
+  if grep -q "^$2=" "$1"; then
+    sed -i "s|^$2=.*|$2=$3|" "$1"
+  else
+    echo "$2=$3" >> "$1"
+  fi
+}
+
+#ID=ubuntu оставляем: от него зависят Steam, драйверы и сторонние установщики
+osr="$ROOT/usr/lib/os-release"
+if [ -f "$osr" ] && [ ! -L "$osr" ]; then
+  setkv "$osr" NAME '"Lucix"'
+  setkv "$osr" PRETTY_NAME "\"Lucix $VER\""
+  setkv "$osr" VERSION "\"$VER\""
+  setkv "$osr" HOME_URL "\"$REPO\""
+  setkv "$osr" SUPPORT_URL "\"$REPO/issues\""
+  setkv "$osr" BUG_REPORT_URL "\"$REPO/issues\""
+  setkv "$osr" PRIVACY_POLICY_URL "\"$REPO\""
+  setkv "$osr" LOGO lucix
+fi
+
+#надпись при входе в текстовую консоль
+[ -d "$ROOT/etc" ] && printf 'Lucix %s \\n \\l\n\n' "$VER" > "$ROOT/etc/issue"
+[ -d "$ROOT/etc" ] && printf 'Lucix %s\n' "$VER" > "$ROOT/etc/issue.net"
+
+#описание в lsb_release, DISTRIB_ID не трогаем, на него опираются автообновления
+if [ -f "$ROOT/etc/lsb-release" ]; then
+  sed -i "s|^DISTRIB_DESCRIPTION=.*|DISTRIB_DESCRIPTION=\"Lucix $VER\"|" "$ROOT/etc/lsb-release"
+fi
+exit 0
+BRSH
+cat > "$br/DEBIAN/postinst" <<'BRPOST'
+#!/bin/sh
+set -e
+case "$1" in
+  configure|triggered) /usr/share/lucix/apply-branding.sh || true ;;
+esac
+exit 0
+BRPOST
+printf 'interest-noawait /usr/lib/os-release\n' > "$br/DEBIAN/triggers"
+chmod 0755 "$br/DEBIAN" "$br/DEBIAN/postinst" "$br/usr/share/lucix/apply-branding.sh"
+dpkg-deb --root-owner-group --build "$br" "$OUT/lucix-branding_${RAW_VERSION}_all.deb"
+rm -rf "$br"
 
 ( cd "$OUT" && sha256sum ./*.deb | sed 's| \./| |' > SHA256SUMS )
 ls -lh "$OUT"

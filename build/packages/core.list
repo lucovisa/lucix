@@ -8,7 +8,9 @@ locales
 sudo
 nano
 network-manager
-cinnamon-desktop-environment
+kde-plasma-desktop
+plasma-session-x11
+kwin-x11
 lightdm
 lightdm-gtk-greeter
 xorg

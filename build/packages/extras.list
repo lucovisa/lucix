@@ -1,20 +1,26 @@
 #желательные пакеты
+#рабочий стол Plasma: приложения
+dolphin
+konsole
+kate
+ark
+spectacle
+plasma-systemmonitor
+kscreen
+plasma-nm
+plasma-pa
+powerdevil
+bluedevil
+kio-extras
+ffmpegthumbs
+kde-config-gtk-style
+breeze-gtk-theme
+xdg-desktop-portal-kde
 pipewire-audio
-pavucontrol
-gnome-terminal
-nemo-fileroller
-file-roller
-gnome-system-monitor
-xed
 gvfs-backends
-network-manager-gnome
 bluez
-blueman
 xdg-user-dirs
-xdg-user-dirs-gtk
 xdg-utils
-yaru-theme-gtk
-yaru-theme-icon
 fonts-ubuntu
 fonts-noto-core
 fonts-noto-color-emoji
@@ -39,9 +45,6 @@ timeshift
 ubuntu-drivers-common
 pkexec
 polkitd
-policykit-1-gnome
-polkit-1-gnome
-polkit-gnome
 #usb wifi адаптеры
 usb-modeswitch
 usb-modeswitch-data
