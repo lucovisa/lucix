@@ -80,7 +80,7 @@ if not any(a.get("id") == "plasma" for a in d["apps"]):
         "steps": [
             {"method": "post", "name": "snapshot-plasma"},
             {"method": "post", "name": "preseed-lightdm"},
-            {"method": "apt", "packages": ["kde-plasma-desktop", "plasma-session-x11", "kwin-x11", "spectacle"]},
+            {"method": "apt", "packages": ["kde-plasma-desktop", "plasma-session-x11", "kwin-x11"]},
             {"method": "post", "name": "keep-lightdm"},
         ],
     })
