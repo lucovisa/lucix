@@ -23,18 +23,25 @@ for pkg in lucix-base lucix-updater lucix-grub-theme; do
   #необязательная установка KDE Plasma из списка приложений (с защитой экрана входа)
   if [[ "$pkg" == "lucix-updater" ]]; then
     python3 - "$tmp" <<'PYUPDATER'
-import json, sys
+import json, re, sys
+
 root = sys.argv[1]
 helper = root + "/usr/lib/lucix/lucix-helper"
 apps = root + "/usr/share/lucix/apps.json"
 
-REMOVE_FUNCS = '\nLIGHTDM_CONF = "/etc/lightdm/lightdm.conf.d/50-lucix.conf"\n\n\ndef post_remove_cinnamon():\n    """удаляет Cinnamon полностью, но только если Plasma (X11) уже установлена"""\n    if not shutil.which("startplasma-x11"):\n        say("Plasma (X11) не установлена, Cinnamon не трогаю")\n        return False\n    r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Package}\\\\n", "cinnamon*", "muffin*", "nemo*"],\n                       capture_output=True, text=True)\n    pkgs = [l.split()[1] for l in r.stdout.splitlines() if l.startswith("ii ") and len(l.split()) == 2]\n    if not pkgs:\n        say("Cinnamon уже удалён")\n    else:\n        if run(["apt-get"] + APT_OPTS + ["purge"] + pkgs) != 0:\n            return False\n        if run(["apt-get"] + APT_OPTS + ["autoremove", "--purge"]) != 0:\n            return False\n    #сеанс по умолчанию теперь Plasma\n    try:\n        with open(LIGHTDM_CONF, encoding="utf-8") as f:\n            text = f.read()\n        if "user-session=" in text:\n            text = "\\n".join("user-session=plasmax11" if l.startswith("user-session=") else l\n                             for l in text.splitlines()) + "\\n"\n        else:\n            text = text.rstrip("\\n") + "\\nuser-session=plasmax11\\n"\n        with open(LIGHTDM_CONF, "w", encoding="utf-8") as f:\n            f.write(text)\n    except OSError as e:\n        say("не удалось сменить сеанс по умолчанию: %s" % e)\n    return True\n\n'
+FUNCS = '''#Plasma, KDE-приложения, удаление Cinnamon и обновление Flatpak после драйвера
+LIGHTDM_CONF = "/etc/lightdm/lightdm.conf.d/50-lucix.conf"
 
-s = open(helper, encoding="utf-8").read()
-if "post_keep_lightdm" not in s:
-    anchor = "POST = {\n"
-    assert s.count(anchor) == 1, "в хелпере не найден блок POST"
-    funcs = '''#Plasma ставит SDDM, а экран входа оставляем прежний (LightDM)
+PLASMA_EXTRAS = ["dolphin", "konsole", "kate", "ark", "gwenview", "okular", "spectacle", "plasma-systemmonitor",
+                 "kscreen", "plasma-nm", "plasma-pa", "powerdevil", "bluedevil", "kio-extras", "ffmpegthumbs",
+                 "kde-config-gtk-style", "breeze-gtk-theme", "xdg-desktop-portal-kde", "keyd", "vlc"]
+
+
+def flatpak_refresh():
+    if shutil.which("flatpak"):
+        run(["flatpak", "update", "-y", "--noninteractive"])
+
+
 def post_snapshot_plasma():
     try:
         snapshot("Lucix: before KDE Plasma")
@@ -57,48 +64,105 @@ def post_keep_lightdm():
     return True
 
 
-'''
-    s = s.replace(anchor, funcs + anchor + '    "snapshot-plasma": post_snapshot_plasma,\n    "preseed-lightdm": post_preseed_lightdm,\n    "keep-lightdm": post_keep_lightdm,\n')
-    open(helper, "w", encoding="utf-8").write(s)
+def post_plasma_extras():
+    avail = []
+    for pkg in PLASMA_EXTRAS:
+        r = subprocess.run(["apt-cache", "policy", pkg], capture_output=True, text=True)
+        cand = [l for l in r.stdout.splitlines() if "Candidate:" in l]
+        if cand and "(none)" not in cand[0]:
+            avail.append(pkg)
+        else:
+            say("package not available, skipped: %s" % pkg)
+    if not avail:
+        return True
+    return run(["apt-get"] + APT_OPTS + ["install", "--no-install-recommends"] + avail) == 0
 
-if "post_remove_cinnamon" not in open(helper, encoding="utf-8").read():
-    s = open(helper, encoding="utf-8").read()
-    anchor2 = '    "keep-lightdm": post_keep_lightdm,\n'
-    assert s.count(anchor2) == 1, "в хелпере не найден keep-lightdm"
-    s = s.replace("POST = {\n", REMOVE_FUNCS + "POST = {\n", 1)
-    s = s.replace(anchor2, anchor2 + '    "remove-cinnamon": post_remove_cinnamon,\n')
-    open(helper, "w", encoding="utf-8").write(s)
+
+def post_remove_cinnamon():
+    """удаляет Cinnamon полностью, но только если Plasma (X11) уже установлена"""
+    if not shutil.which("startplasma-x11"):
+        say("Plasma (X11) не установлена, Cinnamon не трогаю")
+        return False
+    r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Package}\\\\n", "cinnamon*", "muffin*", "nemo*"],
+                       capture_output=True, text=True)
+    pkgs = [l.split()[1] for l in r.stdout.splitlines() if l.startswith("ii ") and len(l.split()) == 2]
+    if not pkgs:
+        say("Cinnamon уже удалён")
+    else:
+        if run(["apt-get"] + APT_OPTS + ["purge"] + pkgs) != 0:
+            return False
+        if run(["apt-get"] + APT_OPTS + ["autoremove", "--purge"]) != 0:
+            return False
+    try:
+        with open(LIGHTDM_CONF, encoding="utf-8") as f:
+            text = f.read()
+        if "user-session=" in text:
+            text = "\\n".join("user-session=plasmax11" if l.startswith("user-session=") else l
+                             for l in text.splitlines()) + "\\n"
+        else:
+            text = text.rstrip("\\n") + "\\nuser-session=plasmax11\\n"
+        with open(LIGHTDM_CONF, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        say("не удалось сменить сеанс по умолчанию: %s" % e)
+    return True
+
+
+'''
+
+POST_NAMES = (("snapshot-plasma", "post_snapshot_plasma"), ("preseed-lightdm", "post_preseed_lightdm"),
+              ("keep-lightdm", "post_keep_lightdm"), ("plasma-extras", "post_plasma_extras"),
+              ("remove-cinnamon", "post_remove_cinnamon"))
+
+h = open(helper, encoding="utf-8").read()
+if "def post_plasma_extras" not in h:
+    assert h.count("POST = {\n") == 1, "в хелпере не найден блок POST"
+    entries = "".join('    "%s": %s,\n' % kv for kv in POST_NAMES)
+    h = h.replace("POST = {\n", FUNCS + "POST = {\n" + entries, 1)
+    #после установки драйвера NVIDIA Flatpak-приложениям (Steam и др.) нужно подходящее расширение драйвера
+    m = re.search(r"def drivers_install\(snap\):\n.*?\n\n\n", h, re.S)
+    assert m, "в хелпере не найден drivers_install"
+    body = m.group(0)
+    assert body.count('        say("DONE reboot is needed")\n') == 2
+    h = h.replace(body, body.replace('        say("DONE reboot is needed")\n',
+                                     '        flatpak_refresh()\n        say("DONE reboot is needed")\n'))
+    open(helper, "w", encoding="utf-8").write(h)
 
 d = json.load(open(apps, encoding="utf-8"))
-if not any(a.get("id") == "plasma" for a in d["apps"]):
+ids = [a.get("id") for a in d["apps"]]
+PLASMA_STEPS = [
+    {"method": "post", "name": "snapshot-plasma"},
+    {"method": "post", "name": "preseed-lightdm"},
+    {"method": "apt", "packages": ["kde-plasma-desktop", "plasma-session-x11", "kwin-x11"]},
+    {"method": "post", "name": "plasma-extras"},
+    {"method": "post", "name": "keep-lightdm"},
+]
+if "plasma" not in ids:
     d["apps"].append({
         "id": "plasma",
         "name": ["KDE Plasma (experimental)", "KDE Plasma (экспериментально)"],
-        "desc": ["Second desktop, about 1 GB. On the login screen pick Plasma (X11). Cinnamon stays",
-                 "Второй рабочий стол, около 1 ГБ. На экране входа выбери сеанс Plasma (X11), Cinnamon остаётся"],
-        "default": False,
-        "steps": [
-            {"method": "post", "name": "snapshot-plasma"},
-            {"method": "post", "name": "preseed-lightdm"},
-            {"method": "apt", "packages": ["kde-plasma-desktop", "plasma-session-x11", "kwin-x11"]},
-            {"method": "post", "name": "keep-lightdm"},
-        ],
-    })
-    pass
-
-if not any(a.get("id") == "remove-cinnamon" for a in d["apps"]):
+        "desc": ["Second desktop, about 1 GB. On the login screen pick Plasma (X11)",
+                 "Рабочий стол Plasma, около 1 ГБ. На экране входа выбери сеанс Plasma (X11)"],
+        "default": False, "steps": PLASMA_STEPS})
+else:
+    for a in d["apps"]:
+        if a.get("id") == "plasma":
+            a["steps"] = PLASMA_STEPS
+if "kde-apps" not in ids:
+    d["apps"].append({
+        "id": "kde-apps",
+        "name": ["KDE apps (editor, archiver, viewers)", "Приложения KDE (редактор, архиватор, просмотр)"],
+        "desc": ["Kate, Dolphin, Konsole, Ark, Gwenview, Okular, Spectacle and the other Plasma basics",
+                 "Kate (текстовые документы), Dolphin, Konsole, Ark, Gwenview, Okular, Spectacle и остальная база Plasma"],
+        "default": True, "steps": [{"method": "post", "name": "plasma-extras"}]})
+if "remove-cinnamon" not in ids:
     d["apps"].append({
         "id": "remove-cinnamon",
         "name": ["Remove Cinnamon (Plasma only)", "Удалить Cinnamon (останется только Plasma)"],
         "desc": ["ONLY from a Plasma session and only after checking that Plasma works. Removes Cinnamon completely",
                  "ТОЛЬКО из сеанса Plasma и только когда убедился, что она работает. Cinnamon удаляется полностью"],
         "default": False,
-        "steps": [
-            {"method": "post", "name": "snapshot-plasma"},
-            {"method": "post", "name": "remove-cinnamon"},
-        ],
-    })
-
+        "steps": [{"method": "post", "name": "snapshot-plasma"}, {"method": "post", "name": "remove-cinnamon"}]})
 json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYUPDATER
     #вкладка «Система»: показываем список обновляемых пакетов, а не только их число
@@ -647,6 +711,92 @@ def screenshot():
     run("systemctl", "--user", "restart", "plasma-kglobalaccel.service")
 
 
+def keyboard():
+    """русская и английская раскладки, переключение Alt+Shift, NumLock включён при входе"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    for key, val in (("Use", "true"), ("LayoutList", "us,ru"), ("VariantList", ","), ("DisplayNames", ","),
+                     ("Options", "grp:alt_shift_toggle"), ("ResetOldOptions", "true"), ("SwitchMode", "Global")):
+        run("kwriteconfig6", "--file", "kxkbrc", "--group", "Layout", "--key", key, val)
+    run("kwriteconfig6", "--file", "kcminputrc", "--group", "Keyboard", "--key", "NumLock", "0")
+    if shutil.which("setxkbmap"):  # сразу, не дожидаясь перезахода
+        run("setxkbmap", "-layout", "us,ru", "-option", "", "-option", "grp:alt_shift_toggle")
+
+
+APP_DIRS = ("/usr/share/applications", "/var/lib/flatpak/exports/share/applications",
+            os.path.join(HOME, ".local", "share", "applications"),
+            os.path.join(HOME, ".local", "share", "flatpak", "exports", "share", "applications"))
+
+
+def desktop_exists(name):
+    return any(os.path.isfile(os.path.join(d, name)) for d in APP_DIRS)
+
+
+def clean_mimeapps():
+    """убирает из ассоциаций программы, которых больше нет (например, удалённые Cinnamon и Nemo)"""
+    path = os.path.join(HOME, ".config", "mimeapps.list")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return
+    out, dropped = [], 0
+    for line in lines:
+        if "=" in line and not line.startswith(("#", "[")):
+            mime, apps = line.split("=", 1)
+            kept = [a for a in apps.split(";") if a and desktop_exists(a)]
+            dropped += len([a for a in apps.split(";") if a]) - len(kept)
+            if kept:
+                out.append("%s=%s;" % (mime, ";".join(kept)))
+            continue
+        out.append(line)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    log("mimeapps: убрано несуществующих программ: %d" % dropped)
+
+
+DEFAULT_APPS = (
+    ("org.kde.kate.desktop", ("text/plain", "text/markdown", "text/x-log", "text/x-python", "text/x-shellscript",
+                              "application/json", "application/xml", "text/csv", "text/x-readme")),
+    ("org.kde.dolphin.desktop", ("inode/directory",)),
+    ("org.kde.ark.desktop", ("application/zip", "application/x-tar", "application/x-compressed-tar",
+                             "application/x-xz-compressed-tar", "application/gzip", "application/x-7z-compressed",
+                             "application/vnd.rar")),
+    ("org.kde.gwenview.desktop", ("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")),
+    ("org.kde.okular.desktop", ("application/pdf",)),
+)
+
+
+def apps():
+    """программы по умолчанию: текстовые документы, папки, архивы, картинки, PDF"""
+    if not (desktop_exists("org.kde.kate.desktop") and desktop_exists("org.kde.dolphin.desktop")):
+        log("Kate или Dolphin ещё не установлены, настрою позже")
+        return False
+    clean_mimeapps()
+    for desktop, mimes in DEFAULT_APPS:
+        if desktop_exists(desktop):
+            run("xdg-mime", "default", desktop, *mimes)
+    if desktop_exists("org.mozilla.firefox.desktop") and shutil.which("xdg-settings"):
+        run("xdg-settings", "set", "default-web-browser", "org.mozilla.firefox.desktop")
+    if shutil.which("kbuildsycoca6"):
+        run("kbuildsycoca6")
+
+
+def panel():
+    """панель задач по центру, скрывается сама, полупрозрачная, как была раньше"""
+    if not shutil.which("dbus-send"):
+        return False
+    js = ('var ps = panels(); for (var i = 0; i < ps.length; i++) { var p = ps[i];'
+          ' try { p.alignment = "center"; } catch (e) {}'
+          ' try { p.lengthMode = "fit"; } catch (e) {}'
+          ' try { p.floating = true; } catch (e) {}'
+          ' try { p.opacity = "translucent"; } catch (e) {}'
+          ' try { p.hiding = "autohide"; } catch (e) {} } ps.length;')
+    if run("dbus-send", "--session", "--print-reply", "--dest=org.kde.plasmashell", "/PlasmaShell",
+           "org.kde.PlasmaShell.evaluateScript", "string:" + js) != 0:
+        return False
+
+
 VIDEO_MIMES = ("video/mp4", "video/x-matroska", "video/webm", "video/x-msvideo", "video/quicktime",
                "video/mpeg", "video/x-flv", "video/ogg", "video/3gpp")
 
@@ -666,6 +816,9 @@ STEPS = (
     ("kickoff", 1, kickoff),
     ("screenshot", 1, screenshot),
     ("videos", 1, videos),
+    ("keyboard", 1, keyboard),
+    ("apps", 1, apps),
+    ("panel", 1, panel),
 )
 
 
@@ -886,9 +1039,89 @@ Icon=input-keyboard
 Categories=Settings;
 Terminal=false
 KEYSDESKTOP
-    #рекомендованные пакеты: python3-pil (конвертер курсоров), vlc и кодеки (видео mp4), flatpak (приложения из магазина), keyd (клавиши)
-    sed -i 's/^Recommends: .*/&, python3-pil, vlc, ffmpegthumbnailer, gstreamer1.0-libav, flatpak, keyd, alsa-utils/' "$tmp/DEBIAN/control"
-    grep -q '^Recommends: .*keyd' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
+    #обязательные пакеты: keyd (клавиши), vlc (видео), python3-pil (курсоры Windows), flatpak (магазин), kate/konsole/dolphin/ark (база Plasma)
+    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark/' "$tmp/DEBIAN/control"
+    #желательные: если их нет в репозитории, обновление всё равно пройдёт
+    sed -i 's/^Recommends: .*/&, ffmpegthumbnailer, gstreamer1.0-libav, alsa-utils, gwenview, okular, spectacle/' "$tmp/DEBIAN/control"
+    grep -q '^Depends: .*keyd.*kate' "$tmp/DEBIAN/control" || { echo "не удалось дописать Depends"; exit 1; }
+    grep -q '^Recommends: .*gwenview' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
+    #уроборос везде отзеркален: значки Lucix зеркалим при сборке (как заставку и обои)
+    flip="$(mktemp)"
+    cat > "$flip" <<'FLIPPY'
+import struct, sys, zlib
+
+def _paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    return a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+
+def flip(path):
+    """зеркалит PNG по горизонтали (8 бит на канал, без чересстрочности), без внешних библиотек"""
+    data = open(path, "rb").read()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "не PNG"
+    pos, chunks, idat = 8, [], b""
+    while pos < len(data):
+        ln, typ = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + ln]
+        if typ == b"IDAT":
+            idat += body
+        else:
+            chunks.append((typ, body))
+        pos += 12 + ln
+    ihdr = dict(zip(("w", "h", "depth", "ctype", "comp", "filt", "interlace"), struct.unpack(">IIBBBBB", chunks[0][1])))
+    assert ihdr["depth"] == 8 and ihdr["interlace"] == 0 and ihdr["ctype"] in (2, 6, 0, 4), "формат PNG не поддержан"
+    bpp = {0: 1, 2: 3, 4: 2, 6: 4}[ihdr["ctype"]]
+    w, h = ihdr["w"], ihdr["h"]
+    stride = w * bpp
+    raw = zlib.decompress(idat)
+    rows, prev = [], bytearray(stride)
+    for y in range(h):
+        ft = raw[y * (stride + 1)]
+        line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0
+            b = prev[i]
+            c = prev[i - bpp] if i >= bpp else 0
+            if ft == 1: line[i] = (line[i] + a) & 255
+            elif ft == 2: line[i] = (line[i] + b) & 255
+            elif ft == 3: line[i] = (line[i] + (a + b) // 2) & 255
+            elif ft == 4: line[i] = (line[i] + _paeth(a, b, c)) & 255
+        rows.append(line)
+        prev = line
+    out = bytearray()
+    for line in rows:
+        px = [line[i:i + bpp] for i in range(0, stride, bpp)][::-1]
+        out.append(0)
+        for p in px:
+            out += p
+    comp = zlib.compress(bytes(out), 9)
+    res = bytearray(b"\x89PNG\r\n\x1a\n")
+    def put(t, b):
+        res.extend(struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b) & 0xffffffff))
+    for typ, body in chunks:
+        if typ == b"IEND":
+            put(b"IDAT", comp)
+        put(typ, body)
+    open(path, "wb").write(bytes(res))
+
+if __name__ == "__main__":
+    for p in sys.argv[1:]:
+        flip(p)
+FLIPPY
+    find "$tmp/usr/share/icons" "$tmp/usr/share/pixmaps" -name 'lucix*.png' -print0 2>/dev/null | xargs -0 -r python3 "$flip"
+    rm -f "$flip"
+    [[ -f "$tmp/usr/share/icons/hicolor/256x256/apps/lucix.png" ]] || { echo "нет значка lucix"; exit 1; }
+    #«Автозагрузка» как приложение: открывает настройки автозапуска Plasma
+    cat > "$tmp/usr/share/applications/lucix-autostart.desktop" <<'AUTOSTARTAPP'
+[Desktop Entry]
+Type=Application
+Name=Автозагрузка
+Comment=Какие программы запускаются при входе в систему
+Exec=kcmshell6 autostart
+Icon=system-run
+Categories=Settings;System;
+Terminal=false
+AUTOSTARTAPP
     #в проекте только Plasma: старые файлы Nemo из packaging в пакет не попадают
     rm -rf "$tmp/usr/share/nemo"
   fi
@@ -989,6 +1222,38 @@ printf 'interest-noawait /usr/lib/os-release\n' > "$br/DEBIAN/triggers"
 chmod 0755 "$br/DEBIAN" "$br/DEBIAN/postinst" "$br/usr/share/lucix/apply-branding.sh"
 dpkg-deb --root-owner-group --build "$br" "$OUT/lucix-branding_${RAW_VERSION}_all.deb"
 rm -rf "$br"
+
+#пакет lucix-system: раскладка us+ru и переключение Alt+Shift для экрана входа и консоли (один раз, дальше настройки не трогаем)
+sy="$(mktemp -d)"
+mkdir -p "$sy/DEBIAN"
+cat > "$sy/DEBIAN/control" <<SYCONTROL
+Package: lucix-system
+Version: $DEB_VERSION
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: Lucix <lucovisa@users.noreply.github.com>
+Depends: lucix-base
+Description: Lucix system defaults
+ Sets us+ru keyboard layouts with Alt+Shift switching for the login screen and console.
+SYCONTROL
+cat > "$sy/DEBIAN/postinst" <<'SYPOST'
+#!/bin/sh
+set -e
+if [ "$1" = configure ] && [ -f /etc/default/keyboard ] && [ ! -e /var/lib/lucix/keyboard-set ]; then
+  sed -i 's/^XKBLAYOUT=.*/XKBLAYOUT="us,ru"/' /etc/default/keyboard
+  grep -q '^XKBLAYOUT=' /etc/default/keyboard || echo 'XKBLAYOUT="us,ru"' >> /etc/default/keyboard
+  sed -i 's/^XKBOPTIONS=.*/XKBOPTIONS="grp:alt_shift_toggle"/' /etc/default/keyboard
+  grep -q '^XKBOPTIONS=' /etc/default/keyboard || echo 'XKBOPTIONS="grp:alt_shift_toggle"' >> /etc/default/keyboard
+  sed -i 's/^XKBVARIANT=.*/XKBVARIANT=""/' /etc/default/keyboard
+  mkdir -p /var/lib/lucix
+  touch /var/lib/lucix/keyboard-set
+fi
+exit 0
+SYPOST
+chmod 0755 "$sy/DEBIAN" "$sy/DEBIAN/postinst"
+dpkg-deb --root-owner-group --build "$sy" "$OUT/lucix-system_${RAW_VERSION}_all.deb"
+rm -rf "$sy"
 
 ( cd "$OUT" && sha256sum ./*.deb | sed 's| \./| |' > SHA256SUMS )
 ls -lh "$OUT"
