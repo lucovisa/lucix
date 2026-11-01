@@ -29,39 +29,16 @@ root = sys.argv[1]
 helper = root + "/usr/lib/lucix/lucix-helper"
 apps = root + "/usr/share/lucix/apps.json"
 
-FUNCS = '''#Plasma, KDE-приложения, удаление Cinnamon и обновление Flatpak после драйвера
-LIGHTDM_CONF = "/etc/lightdm/lightdm.conf.d/50-lucix.conf"
-
-PLASMA_EXTRAS = ["dolphin", "konsole", "kate", "ark", "gwenview", "okular", "spectacle", "plasma-systemmonitor",
+FUNCS = '''#KDE-приложения и обновление Flatpak после установки драйвера
+PLASMA_EXTRAS = ["dolphin", "konsole", "kate", "ark", "okular", "kde-spectacle", "plasma-systemmonitor",
                  "kscreen", "plasma-nm", "plasma-pa", "powerdevil", "bluedevil", "kio-extras", "ffmpegthumbs",
-                 "kde-config-gtk-style", "breeze-gtk-theme", "xdg-desktop-portal-kde", "keyd", "vlc"]
+                 "kde-config-gtk-style", "breeze-gtk-theme", "xdg-desktop-portal-kde", "xdg-desktop-portal-gtk",
+                 "keyd", "vlc"]
 
 
 def flatpak_refresh():
     if shutil.which("flatpak"):
         run(["flatpak", "update", "-y", "--noninteractive"])
-
-
-def post_snapshot_plasma():
-    try:
-        snapshot("Lucix: before KDE Plasma")
-    except Exception as e:
-        say("snapshot skipped: %s" % e)
-    return True
-
-
-def post_preseed_lightdm():
-    subprocess.run(["debconf-set-selections"], input="shared/default-x-display-manager select lightdm\\n",
-                   text=True, env=ENV)
-    return True
-
-
-def post_keep_lightdm():
-    if os.path.exists("/usr/sbin/lightdm"):
-        with open("/etc/X11/default-display-manager", "w", encoding="utf-8") as f:
-            f.write("/usr/sbin/lightdm\\n")
-        run(["systemctl", "enable", "--force", "lightdm.service"])
-    return True
 
 
 def post_plasma_extras():
@@ -78,47 +55,12 @@ def post_plasma_extras():
     return run(["apt-get"] + APT_OPTS + ["install", "--no-install-recommends"] + avail) == 0
 
 
-def post_remove_cinnamon():
-    """удаляет Cinnamon полностью, но только если Plasma (X11) уже установлена"""
-    if not shutil.which("startplasma-x11"):
-        say("Plasma (X11) не установлена, Cinnamon не трогаю")
-        return False
-    r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Package}\\\\n", "cinnamon*", "muffin*", "nemo*"],
-                       capture_output=True, text=True)
-    pkgs = [l.split()[1] for l in r.stdout.splitlines() if l.startswith("ii ") and len(l.split()) == 2]
-    if not pkgs:
-        say("Cinnamon уже удалён")
-    else:
-        if run(["apt-get"] + APT_OPTS + ["purge"] + pkgs) != 0:
-            return False
-        if run(["apt-get"] + APT_OPTS + ["autoremove", "--purge"]) != 0:
-            return False
-    try:
-        with open(LIGHTDM_CONF, encoding="utf-8") as f:
-            text = f.read()
-        if "user-session=" in text:
-            text = "\\n".join("user-session=plasmax11" if l.startswith("user-session=") else l
-                             for l in text.splitlines()) + "\\n"
-        else:
-            text = text.rstrip("\\n") + "\\nuser-session=plasmax11\\n"
-        with open(LIGHTDM_CONF, "w", encoding="utf-8") as f:
-            f.write(text)
-    except OSError as e:
-        say("не удалось сменить сеанс по умолчанию: %s" % e)
-    return True
-
-
 '''
-
-POST_NAMES = (("snapshot-plasma", "post_snapshot_plasma"), ("preseed-lightdm", "post_preseed_lightdm"),
-              ("keep-lightdm", "post_keep_lightdm"), ("plasma-extras", "post_plasma_extras"),
-              ("remove-cinnamon", "post_remove_cinnamon"))
 
 h = open(helper, encoding="utf-8").read()
 if "def post_plasma_extras" not in h:
     assert h.count("POST = {\n") == 1, "в хелпере не найден блок POST"
-    entries = "".join('    "%s": %s,\n' % kv for kv in POST_NAMES)
-    h = h.replace("POST = {\n", FUNCS + "POST = {\n" + entries, 1)
+    h = h.replace("POST = {\n", FUNCS + 'POST = {\n    "plasma-extras": post_plasma_extras,\n', 1)
     #после установки драйвера NVIDIA Flatpak-приложениям (Steam и др.) нужно подходящее расширение драйвера
     m = re.search(r"def drivers_install\(snap\):\n.*?\n\n\n", h, re.S)
     assert m, "в хелпере не найден drivers_install"
@@ -129,40 +71,15 @@ if "def post_plasma_extras" not in h:
     open(helper, "w", encoding="utf-8").write(h)
 
 d = json.load(open(apps, encoding="utf-8"))
-ids = [a.get("id") for a in d["apps"]]
-PLASMA_STEPS = [
-    {"method": "post", "name": "snapshot-plasma"},
-    {"method": "post", "name": "preseed-lightdm"},
-    {"method": "apt", "packages": ["kde-plasma-desktop", "plasma-session-x11", "kwin-x11"]},
-    {"method": "post", "name": "plasma-extras"},
-    {"method": "post", "name": "keep-lightdm"},
-]
-if "plasma" not in ids:
-    d["apps"].append({
-        "id": "plasma",
-        "name": ["KDE Plasma (experimental)", "KDE Plasma (экспериментально)"],
-        "desc": ["Second desktop, about 1 GB. On the login screen pick Plasma (X11)",
-                 "Рабочий стол Plasma, около 1 ГБ. На экране входа выбери сеанс Plasma (X11)"],
-        "default": False, "steps": PLASMA_STEPS})
-else:
-    for a in d["apps"]:
-        if a.get("id") == "plasma":
-            a["steps"] = PLASMA_STEPS
-if "kde-apps" not in ids:
+if not any(a.get("id") == "kde-apps" for a in d["apps"]):
     d["apps"].append({
         "id": "kde-apps",
         "name": ["KDE apps (editor, archiver, viewers)", "Приложения KDE (редактор, архиватор, просмотр)"],
-        "desc": ["Kate, Dolphin, Konsole, Ark, Gwenview, Okular, Spectacle and the other Plasma basics",
-                 "Kate (текстовые документы), Dolphin, Konsole, Ark, Gwenview, Okular, Spectacle и остальная база Plasma"],
-        "default": True, "steps": [{"method": "post", "name": "plasma-extras"}]})
-if "remove-cinnamon" not in ids:
-    d["apps"].append({
-        "id": "remove-cinnamon",
-        "name": ["Remove Cinnamon (Plasma only)", "Удалить Cinnamon (останется только Plasma)"],
-        "desc": ["ONLY from a Plasma session and only after checking that Plasma works. Removes Cinnamon completely",
-                 "ТОЛЬКО из сеанса Plasma и только когда убедился, что она работает. Cinnamon удаляется полностью"],
-        "default": False,
-        "steps": [{"method": "post", "name": "snapshot-plasma"}, {"method": "post", "name": "remove-cinnamon"}]})
+        "desc": ["Kate, Dolphin, Konsole, Ark, Okular, Spectacle and the other Plasma basics",
+                 "Kate (текстовые документы), Dolphin, Konsole, Ark, Okular, Spectacle и остальная база Plasma"],
+        "default": True,
+        "check": {"apt": ["kate", "dolphin", "konsole", "ark"]},
+        "steps": [{"method": "post", "name": "plasma-extras"}]})
 json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYUPDATER
     #вкладка «Система»: показываем список обновляемых пакетов, а не только их число
@@ -215,6 +132,63 @@ if "sys_view" not in s:
     if "\nimport shutil" not in s:
         assert "\nimport subprocess" in s, "нет import subprocess"
         s = s.replace("\nimport subprocess", "\nimport shutil\nimport subprocess", 1)
+    open(p, "w", encoding="utf-8").write(s)
+
+if "что реально установлено сейчас" not in s:
+    old_ri = '''def read_installed():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return set(json.load(f).get("installed", []))
+    except Exception:
+        return set()
+'''
+    assert s.count(old_ri) == 1, "в окне не найден read_installed"
+    new_ri = '''def read_installed():
+    """что реально установлено сейчас, а не что записано в файле (приложение могли удалить вручную)"""
+    recorded = set()
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            recorded = set(json.load(f).get("installed", []))
+    except Exception:
+        pass
+    flat = set()
+    if shutil.which("flatpak"):
+        try:
+            r = subprocess.run(["flatpak", "list", "--app", "--columns=application"],
+                               capture_output=True, text=True, timeout=30)
+            flat = {x.strip() for x in r.stdout.splitlines() if x.strip()}
+        except Exception:
+            pass
+
+    def dpkg_good(pkgs):
+        try:
+            r = subprocess.run(["dpkg-query", "-W", "-f=${Package} ${Status}\\n"] + list(pkgs),
+                               capture_output=True, text=True, timeout=30)
+        except Exception:
+            return set()
+        return {l.split()[0] for l in r.stdout.splitlines() if l.strip().endswith("install ok installed")}
+
+    result = set()
+    for app in load_catalog():
+        checked, ok = False, True
+        for st in app.get("steps", []):
+            m = st.get("method")
+            if m == "flatpak":
+                checked, ok = True, ok and st.get("ref") in flat
+            elif m == "apt":
+                pk = st.get("packages", [])
+                checked, ok = True, ok and all(p in dpkg_good(pk) for p in pk)
+            elif m == "github_deb":
+                token = st.get("repo", "").split("/")[-1].split("-")[0]
+                checked, ok = True, ok and bool(token) and bool(dpkg_good([token + "*"]))
+        extra = app.get("check", {}).get("apt")
+        if extra:
+            checked, ok = True, ok and all(p in dpkg_good(extra) for p in extra)
+        if (ok if checked else app["id"] in recorded):
+            result.add(app["id"])
+    return result
+'''
+    s = s.replace(old_ri, new_ri)
     open(p, "w", encoding="utf-8").write(s)
 PYGUI
   fi
@@ -318,11 +292,33 @@ def ask_apply(name):
     return r.returncode == 0
 
 
+LOG = os.path.join(os.path.expanduser("~"), ".cache", "lucix-cursor.log")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except OSError:
+        pass
+
+
 def apply_theme(name):
+    """применяет курсор; возвращает текст ошибки или пустую строку"""
+    err = ""
     if shutil.which("plasma-apply-cursortheme"):
-        subprocess.run(["plasma-apply-cursortheme", name])
+        listed = subprocess.run(["plasma-apply-cursortheme", "--list-themes"], capture_output=True, text=True).stdout
+        p = subprocess.run(["plasma-apply-cursortheme", name], capture_output=True, text=True)
+        log("список тем: %s" % listed.replace("\n", " ")[:300])
+        log("применение %s: rc=%s out=%s err=%s" % (name, p.returncode, p.stdout.strip(), p.stderr.strip()))
+        if p.returncode != 0:
+            err = (p.stderr or p.stdout).strip() or "plasma-apply-cursortheme вернул ошибку"
+    else:
+        err = "не найдена команда plasma-apply-cursortheme"
     if shutil.which("gsettings"):  # для GTK-приложений
         subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", "'%s'" % name.replace("'", "")])
+    return err
 
 
 def find_linux_themes(root):
@@ -571,7 +567,9 @@ def main():
             names.append(name)
     if len(names) == 1:
         if ask_apply(names[0]):
-            apply_theme(names[0])
+            err = apply_theme(names[0])
+            if err:
+                say("Курсор установлен, но применить сразу не вышло:\n%s\n\nВыбери его вручную: Параметры системы, Внешний вид, Курсоры. Подробности в %s" % (err, LOG))
     else:
         say("Установлено курсоров: %d (%s).\nВыбрать: Параметры системы → Темы → Указатель мыши." % (len(names), ", ".join(names)))
     return 0
@@ -635,18 +633,25 @@ def run(*cmd, timeout=60):
     except (OSError, subprocess.TimeoutExpired) as e:
         log("%s -> %r" % (" ".join(cmd), e))
         return 1
-    log("%s -> rc=%s %s" % (" ".join(cmd), p.returncode, p.stderr.strip()))
+    out = p.stdout.strip().replace("\n", " ")[:200]
+    log("%s -> rc=%s %s %s" % (" ".join(cmd)[:160], p.returncode, p.stderr.strip(), out))
     return p.returncode
 
 
+HOME_APPS = ("org.mozilla.firefox", "com.google.Chrome", "com.discordapp.Discord")
+
+
 def flatpak():
-    """браузеру и остальным Flatpak-приложениям: домашняя папка, диски и свои курсоры"""
+    """доступ к дискам и своим курсорам для всех; домашняя папка целиком только браузерам и Discord (Steam от неё ломается)"""
     if not shutil.which("flatpak"):
         log("flatpak не найден, настрою позже")
         return False
-    folders = ("home", "/media", "/run/media", "/mnt")
-    run("flatpak", "override", "--user", *["--filesystem=%s" % f for f in folders])
-    run("flatpak", "override", "--user", "--filesystem=xdg-data/icons:ro", "--filesystem=~/.icons:ro")
+    run("flatpak", "override", "--user", "--nofilesystem=home", "--nofilesystem=host",
+        "--filesystem=/media", "--filesystem=/run/media", "--filesystem=/mnt",
+        "--filesystem=xdg-data/icons:ro", "--filesystem=~/.icons:ro")
+    for ref in HOME_APPS:
+        run("flatpak", "override", "--user", "--filesystem=home", ref)
+    run("flatpak", "override", "--user", "--nofilesystem=home", "--nofilesystem=host", "com.valvesoftware.Steam")
     #без этого каталога значки пользовательских Flatpak-приложений видны только после перезахода
     os.makedirs(os.path.join(HOME, ".local", "share", "flatpak", "exports", "share"), exist_ok=True)
 
@@ -732,6 +737,36 @@ def desktop_exists(name):
     return any(os.path.isfile(os.path.join(d, name)) for d in APP_DIRS)
 
 
+MIMEAPPS = os.path.join(HOME, ".config", "mimeapps.list")
+
+
+def set_defaults(pairs):
+    """pairs: [(mime, desktop)]. Пишет ~/.config/mimeapps.list напрямую: xdg-mime в KDE требует qtpaths, которого нет"""
+    try:
+        with open(MIMEAPPS, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    head = "[Default Applications]"
+    if head not in lines:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(head)
+    start = lines.index(head)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+    for mime, desktop in pairs:
+        for i in range(start + 1, end):
+            if lines[i].split("=", 1)[0] == mime:
+                lines[i] = "%s=%s;" % (mime, desktop)
+                break
+        else:
+            lines.insert(end, "%s=%s;" % (mime, desktop))
+            end += 1
+    os.makedirs(os.path.dirname(MIMEAPPS), exist_ok=True)
+    with open(MIMEAPPS, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def clean_mimeapps():
     """убирает из ассоциаций программы, которых больше нет (например, удалённые Cinnamon и Nemo)"""
     path = os.path.join(HOME, ".config", "mimeapps.list")
@@ -762,38 +797,127 @@ DEFAULT_APPS = (
     ("org.kde.ark.desktop", ("application/zip", "application/x-tar", "application/x-compressed-tar",
                              "application/x-xz-compressed-tar", "application/gzip", "application/x-7z-compressed",
                              "application/vnd.rar")),
-    ("org.kde.gwenview.desktop", ("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")),
+    ("pinta.desktop", ("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")),
+    ("com.github.PintaProject.Pinta.desktop", ("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")),
     ("org.kde.okular.desktop", ("application/pdf",)),
 )
 
 
 def apps():
-    """программы по умолчанию: текстовые документы, папки, архивы, картинки, PDF"""
+    """программы по умолчанию: текстовые документы, папки, архивы, картинки, PDF, браузер"""
     if not (desktop_exists("org.kde.kate.desktop") and desktop_exists("org.kde.dolphin.desktop")):
         log("Kate или Dolphin ещё не установлены, настрою позже")
         return False
     clean_mimeapps()
+    pairs = []
     for desktop, mimes in DEFAULT_APPS:
         if desktop_exists(desktop):
-            run("xdg-mime", "default", desktop, *mimes)
-    if desktop_exists("org.mozilla.firefox.desktop") and shutil.which("xdg-settings"):
-        run("xdg-settings", "set", "default-web-browser", "org.mozilla.firefox.desktop")
+            pairs += [(m, desktop) for m in mimes]
+    if desktop_exists("org.mozilla.firefox.desktop"):
+        pairs += [(m, "org.mozilla.firefox.desktop") for m in
+                  ("x-scheme-handler/http", "x-scheme-handler/https", "text/html", "application/xhtml+xml")]
+    set_defaults(pairs)
+    log("программ по умолчанию записано: %d" % len(pairs))
     if shutil.which("kbuildsycoca6"):
         run("kbuildsycoca6")
 
 
+PANEL_JS = (
+    'var ps = panels(); var bad = [];'
+    ' if (ps.length == 0) { "no panels"; } else {'
+    ' var p = ps[0]; var launchers = ""; var ws = p.widgets();'
+    ' for (var i = 0; i < ws.length; i++) {'
+    '   if (ws[i].type == "org.kde.plasma.icontasks" || ws[i].type == "org.kde.plasma.taskmanager") {'
+    '     ws[i].currentConfigGroup = ["General"]; launchers = ws[i].readConfig("launchers", ""); } }'
+    ' for (var j = 0; j < ws.length; j++) { ws[j].remove(); }'
+    ' try { p.hiding = "none"; } catch (e) { bad.push("hiding"); }'
+    ' try { p.lengthMode = "fill"; } catch (e) { bad.push("lengthMode"); }'
+    ' try { p.floating = false; } catch (e) { bad.push("floating"); }'
+    ' try { p.opacity = "translucent"; } catch (e) { bad.push("opacity"); }'
+    ' var lead = p.addWidget("org.kde.plasma.panelspacer"); lead.currentConfigGroup = ["General"];'
+    ' lead.writeConfig("expanding", false); lead.writeConfig("length", 230);'
+    ' p.addWidget("org.kde.plasma.panelspacer");'
+    ' var k = p.addWidget("org.kde.plasma.kickoff"); k.currentConfigGroup = ["General"]; k.writeConfig("icon", "lucix");'
+    ' var t = p.addWidget("org.kde.plasma.icontasks");'
+    ' if (launchers) { t.currentConfigGroup = ["General"]; t.writeConfig("launchers", launchers); }'
+    ' p.addWidget("org.kde.plasma.panelspacer");'
+    ' var tray = p.addWidget("org.kde.plasma.systemtray"); tray.currentConfigGroup = ["General"];'
+    ' tray.writeConfig("extraItems", ["org.kde.plasma.networkmanagement", "org.kde.plasma.volume", "org.kde.plasma.battery",'
+    ' "org.kde.plasma.bluetooth", "org.kde.plasma.notifications", "org.kde.plasma.clipboard", "org.kde.plasma.devicenotifier",'
+    ' "org.kde.plasma.keyboardlayout", "org.kde.plasma.keyboardindicator", "org.kde.plasma.brightness",'
+    ' "org.kde.plasma.printmanager", "org.kde.kscreen", "org.kde.plasma.manage-inputmethod"]);'
+    ' tray.writeConfig("hiddenItems", ["org.kde.plasma.mediacontroller"]);'
+    ' p.addWidget("org.kde.plasma.digitalclock");'
+    ' "ok widgets=" + p.widgets().length + " bad=" + bad.join(","); }'
+)
+
+
 def panel():
-    """панель задач по центру, скрывается сама, полупрозрачная, как была раньше"""
+    """панель всегда видна и прозрачная: слева пусто, по центру меню и приложения, справа раскладка, трей и часы"""
     if not shutil.which("dbus-send"):
         return False
-    js = ('var ps = panels(); for (var i = 0; i < ps.length; i++) { var p = ps[i];'
-          ' try { p.alignment = "center"; } catch (e) {}'
-          ' try { p.lengthMode = "fit"; } catch (e) {}'
-          ' try { p.floating = true; } catch (e) {}'
-          ' try { p.opacity = "translucent"; } catch (e) {}'
-          ' try { p.hiding = "autohide"; } catch (e) {} } ps.length;')
     if run("dbus-send", "--session", "--print-reply", "--dest=org.kde.plasmashell", "/PlasmaShell",
-           "org.kde.PlasmaShell.evaluateScript", "string:" + js) != 0:
+           "org.kde.PlasmaShell.evaluateScript", "string:" + PANEL_JS) != 0:
+        return False
+
+
+def kbdisplay():
+    """в индикаторе раскладки только флаг, без букв"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    for key, val in (("ShowFlag", "true"), ("ShowLabel", "false"), ("ShowLayoutIndicator", "true")):
+        run("kwriteconfig6", "--file", "kxkbrc", "--group", "Layout", "--key", key, val)
+
+
+def lockwall():
+    """экран блокировки с нашими обоями (уроборос)"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    img = "file:///usr/share/backgrounds/lucix/lucix.jpg"
+    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Greeter", "--key", "WallpaperPlugin", "org.kde.image")
+    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Greeter", "--group", "Wallpaper",
+        "--group", "org.kde.image", "--group", "General", "--key", "Image", img)
+
+
+def kwin():
+    """без активных углов экрана (обзор окон при наведении), компоновка не отключается во весь экран (меньше подлагов при сворачивании)"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    for grp, key, val in (("Effect-overview", "BorderActivate", ""), ("Effect-windowview", "BorderActivate", ""),
+                          ("Effect-windowview", "BorderActivateAll", ""), ("Effect-windowview", "BorderActivateClass", ""),
+                          ("Effect-desktopgrid", "BorderActivate", ""), ("Compositing", "WindowsBlockCompositing", "false")):
+        run("kwriteconfig6", "--file", "kwinrc", "--group", grp, "--key", key, val)
+    for edge in ("Top", "TopRight", "Right", "BottomRight", "Bottom", "BottomLeft", "Left", "TopLeft"):
+        run("kwriteconfig6", "--file", "kwinrc", "--group", "ElectricBorders", "--key", edge, "None")
+    run("dbus-send", "--session", "--dest=org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
+
+
+def sounds():
+    """убираем системные звуки Plasma (вход, уведомления, ошибки); звуки игр и программ не затрагиваются"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    run("kwriteconfig6", "--file", "kdeglobals", "--group", "Sounds", "--key", "Enable", "false")
+    run("kwriteconfig6", "--file", "kdeglobals", "--group", "Sounds", "--key", "Theme", "none")
+    if shutil.which("xset"):
+        run("xset", "b", "off")
+
+
+def cursor():
+    """курсор Lucix по умолчанию (если он есть в системе); сменить можно в настройках в любой момент"""
+    if not os.path.isdir("/usr/share/icons/Lucix-Cursor"):
+        return False  # курсора в системе пока нет, проверим при следующем входе
+    if not shutil.which("plasma-apply-cursortheme"):
+        return False
+    if run("plasma-apply-cursortheme", "Lucix-Cursor") != 0:
+        return False
+
+
+def trash():
+    """мгновенная очистка корзины (удалить файл = он сразу пропадает)"""
+    if not os.path.isfile("/usr/lib/systemd/user/lucix-trash-clean.path"):
+        return False
+    run("systemctl", "--user", "daemon-reload")
+    if run("systemctl", "--user", "enable", "--now", "lucix-trash-clean.path") != 0:
         return False
 
 
@@ -805,20 +929,93 @@ def videos():
     if not os.path.isfile("/usr/share/applications/vlc.desktop"):
         log("VLC ещё не установлен, видео по умолчанию настрою позже")
         return False
-    run("xdg-mime", "default", "vlc.desktop", *VIDEO_MIMES)
+    set_defaults([(m, "vlc.desktop") for m in VIDEO_MIMES])
+    log("видео по умолчанию: VLC")
+
+
+def privacy():
+    """на экране блокировки и в меню не показывается, что ты смотришь или слушаешь"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Greeter", "--key", "ShowMediaControls", "false")
+
+
+AUTOSTART_OFF = ("org.kde.kdeconnect.daemon.desktop", "kdeconnectd.desktop", "xwaylandvideobridge.desktop",
+                 "org.kde.discover.notifier.desktop", "org.kde.kalendarac.desktop")
+
+
+def memory():
+    """меньше памяти: без индексации файлов (Baloo) и без лишних фоновых программ"""
+    if shutil.which("kwriteconfig6"):
+        run("kwriteconfig6", "--file", "baloofilerc", "--group", "Basic Settings", "--key", "Indexing-Enabled", "false")
+    for tool in ("balooctl6", "balooctl"):
+        if shutil.which(tool):
+            run(tool, "disable")
+            break
+    d = os.path.join(HOME, ".config", "autostart")
+    for name in AUTOSTART_OFF:
+        if any(os.path.isfile(os.path.join(base, name)) for base in ("/etc/xdg/autostart", "/usr/share/autostart")):
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                f.write("[Desktop Entry]\nHidden=true\n")
+
+
+def cleanup():
+    """убираем остатки: ярлык «Диагностика Lucix» на рабочем столе"""
+    for rel in ("Desktop/lucix-diag.desktop", "Рабочий стол/lucix-diag.desktop"):
+        p = os.path.join(HOME, rel)
+        if os.path.isfile(p):
+            os.remove(p)
+            log("удалён %s" % p)
+
+
+def terminal():
+    """в терминале Konsole Ctrl+C копирует выделенное (без выделения прерывает программу), Ctrl+V вставляет"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    for key, val in (("edit_copy", "Ctrl+C; Ctrl+Shift+C"), ("edit_paste", "Ctrl+V; Ctrl+Shift+V"),
+                     ("edit-copy", "Ctrl+C; Ctrl+Shift+C"), ("edit-paste", "Ctrl+V; Ctrl+Shift+V")):
+        run("kwriteconfig6", "--file", "konsolerc", "--group", "Shortcuts", "--key", key, val)
+
+
+def power():
+    """монитор сам не гаснет и компьютер сам не засыпает (на питании от сети)"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    for prof in ("AC", "Battery", "LowBattery"):
+        for key in ("DimDisplayWhenIdle", "TurnOffDisplayWhenIdle"):
+            run("kwriteconfig6", "--file", "powerdevilrc", "--group", prof, "--group", "Display", "--key", key, "false")
+    run("kwriteconfig6", "--file", "powerdevilrc", "--group", "AC", "--group", "SuspendAndShutdown",
+        "--key", "AutoSuspendAction", "0")
+    if shutil.which("xset"):  # сразу, не дожидаясь перезахода
+        run("xset", "s", "off")
+        run("xset", "s", "noblank")
+        run("xset", "-dpms")
+    run("systemctl", "--user", "restart", "plasma-powerdevil.service")
 
 
 STEPS = (
-    ("flatpak", 1, flatpak),
+    ("flatpak", 2, flatpak),
     ("focus", 1, focus),
     ("wallpaper", 1, wallpaper),
     ("colors", 1, colors),
     ("kickoff", 1, kickoff),
     ("screenshot", 1, screenshot),
-    ("videos", 1, videos),
+    ("videos", 2, videos),
     ("keyboard", 1, keyboard),
-    ("apps", 1, apps),
-    ("panel", 1, panel),
+    ("apps", 3, apps),
+    ("panel", 3, panel),
+    ("kbdisplay", 2, kbdisplay),
+    ("lockwall", 1, lockwall),
+    ("kwin", 1, kwin),
+    ("sounds", 1, sounds),
+    ("cursor", 1, cursor),
+    ("trash", 1, trash),
+    ("privacy", 1, privacy),
+    ("memory", 1, memory),
+    ("cleanup", 1, cleanup),
+    ("terminal", 1, terminal),
+    ("power", 1, power),
 )
 
 
@@ -1039,89 +1236,324 @@ Icon=input-keyboard
 Categories=Settings;
 Terminal=false
 KEYSDESKTOP
-    #обязательные пакеты: keyd (клавиши), vlc (видео), python3-pil (курсоры Windows), flatpak (магазин), kate/konsole/dolphin/ark (база Plasma)
-    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark/' "$tmp/DEBIAN/control"
+    #обязательные пакеты: keyd (клавиши), vlc (видео), python3-pil (курсоры Windows), flatpak (магазин), база Plasma,
+    #значок Wi-Fi и громкость, окна выбора файлов («Обзор») в Flatpak и GTK-приложениях
+    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, kde-spectacle, xdg-desktop-portal-kde, xdg-desktop-portal-gtk/' "$tmp/DEBIAN/control"
     #желательные: если их нет в репозитории, обновление всё равно пройдёт
-    sed -i 's/^Recommends: .*/&, ffmpegthumbnailer, gstreamer1.0-libav, alsa-utils, gwenview, okular, spectacle/' "$tmp/DEBIAN/control"
-    grep -q '^Depends: .*keyd.*kate' "$tmp/DEBIAN/control" || { echo "не удалось дописать Depends"; exit 1; }
-    grep -q '^Recommends: .*gwenview' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
-    #уроборос везде отзеркален: значки Lucix зеркалим при сборке (как заставку и обои)
-    flip="$(mktemp)"
-    cat > "$flip" <<'FLIPPY'
-import struct, sys, zlib
+    sed -i 's/^Recommends: .*/&, ffmpegthumbnailer, gstreamer1.0-libav, alsa-utils, okular/' "$tmp/DEBIAN/control"
+    grep -q '^Depends: .*keyd.*portal-gtk' "$tmp/DEBIAN/control" || { echo "не удалось дописать Depends"; exit 1; }
+    grep -q '^Recommends: .*okular' "$tmp/DEBIAN/control" || { echo "не удалось дописать Recommends"; exit 1; }
+    #все приложения одним окном, очистка снимков Timeshift, мгновенная корзина
+    mkdir -p "$tmp/usr/bin" "$tmp/usr/lib/systemd/user" "$tmp/etc/systemd/user/default.target.wants"
+    cat > "$tmp/usr/bin/lucix-apps" <<'LUCIXAPPS'
+#!/usr/bin/env python3
+"""Lucix: все приложения системы в одном окне.
+Вкладки: «Приложения» (всё, что есть в меню), «Все пакеты» (каждый установленный пакет), «Flatpak» (включая среды)."""
+import configparser
+import glob
+import os
+import shutil
+import subprocess
+import sys
 
-def _paeth(a, b, c):
-    p = a + b - c
-    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-    return a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+RU = (os.environ.get("LC_ALL") or os.environ.get("LANG") or "").startswith("ru")
+HOME = os.path.expanduser("~")
+FLATPAK_DIRS = ("/var/lib/flatpak/exports/share/applications",
+                os.path.join(HOME, ".local/share/flatpak/exports/share/applications"))
+SYSTEM_DIR = "/usr/share/applications"
+USER_DIR = os.path.join(HOME, ".local/share/applications")
 
-def flip(path):
-    """зеркалит PNG по горизонтали (8 бит на канал, без чересстрочности), без внешних библиотек"""
-    data = open(path, "rb").read()
-    assert data[:8] == b"\x89PNG\r\n\x1a\n", "не PNG"
-    pos, chunks, idat = 8, [], b""
-    while pos < len(data):
-        ln, typ = struct.unpack(">I4s", data[pos:pos + 8])
-        body = data[pos + 8:pos + 8 + ln]
-        if typ == b"IDAT":
-            idat += body
+
+def run(cmd, timeout=90):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def parse_desktop(path):
+    cp = configparser.RawConfigParser(strict=False)
+    cp.optionxform = str
+    try:
+        cp.read(path, encoding="utf-8")
+    except (configparser.Error, UnicodeDecodeError, OSError):
+        return None
+    if not cp.has_section("Desktop Entry"):
+        return None
+    e = cp["Desktop Entry"]
+    if e.get("Type") != "Application" or e.get("NoDisplay", "false").lower() == "true" \
+            or e.get("Hidden", "false").lower() == "true":
+        return None
+    name = (e.get("Name[ru]") if RU else None) or e.get("Name") or os.path.basename(path)
+    comment = (e.get("Comment[ru]") if RU else None) or e.get("Comment") or ""
+    return name, comment
+
+
+def flatpak_info():
+    """application id -> (название, версия, ветка, установка)"""
+    if not shutil.which("flatpak"):
+        return {}
+    out = run(["flatpak", "list", "--columns=application,name,version,branch,installation"])
+    info = {}
+    for line in out.splitlines():
+        p = line.split("\t")
+        if len(p) >= 5:
+            info[p[0]] = p[1:5]
+    return info
+
+
+def launchers():
+    """список (название, описание, источник, пакет/ссылка, версия) для всех приложений из меню"""
+    flat = flatpak_info()
+    files = []
+    for d, kind in [(SYSTEM_DIR, "apt")] + [(x, "flatpak") for x in FLATPAK_DIRS] + [(USER_DIR, "user")]:
+        for f in sorted(glob.glob(os.path.join(d, "*.desktop"))):
+            files.append((f, kind))
+    owners = {}
+    sys_files = [f for f, k in files if k == "apt"]
+    if sys_files and shutil.which("dpkg-query"):
+        for i in range(0, len(sys_files), 200):
+            for line in run(["dpkg-query", "-S"] + sys_files[i:i + 200]).splitlines():
+                if ": /" in line:
+                    pk, path = line.split(": /", 1)
+                    owners["/" + path.strip()] = pk.split(",")[0].strip().split(":")[0]
+    versions = {}
+    pk_all = sorted(set(owners.values()))
+    for i in range(0, len(pk_all), 200):
+        for line in run(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"] + pk_all[i:i + 200]).splitlines():
+            p = line.split("\t")
+            if len(p) == 2:
+                versions[p[0]] = p[1]
+    rows, seen = [], set()
+    for path, kind in files:
+        parsed = parse_desktop(path)
+        if not parsed:
+            continue
+        name, comment = parsed
+        base = os.path.basename(path)[:-len(".desktop")]
+        if kind == "apt":
+            pkg = owners.get(path, "")
+            row = (name, comment, "Ubuntu (apt)" if RU else "Ubuntu (apt)", pkg, versions.get(pkg, ""))
+        elif kind == "flatpak":
+            i = flat.get(base, ["", "", "", ""])
+            row = (name, comment, "Flatpak", base, i[1])
         else:
-            chunks.append((typ, body))
-        pos += 12 + ln
-    ihdr = dict(zip(("w", "h", "depth", "ctype", "comp", "filt", "interlace"), struct.unpack(">IIBBBBB", chunks[0][1])))
-    assert ihdr["depth"] == 8 and ihdr["interlace"] == 0 and ihdr["ctype"] in (2, 6, 0, 4), "формат PNG не поддержан"
-    bpp = {0: 1, 2: 3, 4: 2, 6: 4}[ihdr["ctype"]]
-    w, h = ihdr["w"], ihdr["h"]
-    stride = w * bpp
-    raw = zlib.decompress(idat)
-    rows, prev = [], bytearray(stride)
-    for y in range(h):
-        ft = raw[y * (stride + 1)]
-        line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
-        for i in range(stride):
-            a = line[i - bpp] if i >= bpp else 0
-            b = prev[i]
-            c = prev[i - bpp] if i >= bpp else 0
-            if ft == 1: line[i] = (line[i] + a) & 255
-            elif ft == 2: line[i] = (line[i] + b) & 255
-            elif ft == 3: line[i] = (line[i] + (a + b) // 2) & 255
-            elif ft == 4: line[i] = (line[i] + _paeth(a, b, c)) & 255
-        rows.append(line)
-        prev = line
-    out = bytearray()
-    for line in rows:
-        px = [line[i:i + bpp] for i in range(0, stride, bpp)][::-1]
-        out.append(0)
-        for p in px:
-            out += p
-    comp = zlib.compress(bytes(out), 9)
-    res = bytearray(b"\x89PNG\r\n\x1a\n")
-    def put(t, b):
-        res.extend(struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b) & 0xffffffff))
-    for typ, body in chunks:
-        if typ == b"IEND":
-            put(b"IDAT", comp)
-        put(typ, body)
-    open(path, "wb").write(bytes(res))
+            row = (name, comment, "Свой ярлык" if RU else "Custom launcher", base, "")
+        key = (name, row[2], row[3])
+        if key not in seen:
+            seen.add(key)
+            rows.append(row)
+    return sorted(rows, key=lambda r: r[0].lower())
+
+
+def packages():
+    """каждый установленный пакет: (имя, версия, размер КБ, описание)"""
+    out = run(["dpkg-query", "-W", "-f=${db:Status-Abbrev}\t${Package}\t${Version}\t${Installed-Size}\t${binary:Summary}\n"])
+    rows = []
+    for line in out.splitlines():
+        p = line.split("\t", 4)
+        if len(p) == 5 and p[0].startswith("ii"):
+            try:
+                size = int(p[3] or 0)
+            except ValueError:
+                size = 0
+            rows.append((p[1], p[2], size, p[4]))
+    return sorted(rows, key=lambda r: r[0])
+
+
+def flatpaks():
+    """все Flatpak, включая среды выполнения: (название, ссылка, версия, ветка, установка, размер)"""
+    if not shutil.which("flatpak"):
+        return []
+    out = run(["flatpak", "list", "--columns=name,application,version,branch,installation,size"])
+    rows = [tuple(l.split("\t")[:6]) for l in out.splitlines() if l.count("\t") >= 5]
+    return sorted(rows, key=lambda r: r[0].lower())
+
+
+def human(kb):
+    return "%.1f МБ" % (kb / 1024) if kb >= 1024 else "%d КБ" % kb
+
+
+def main():
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk
+
+    win = Gtk.Window(title="Все приложения Lucix" if RU else "All Lucix apps")
+    win.set_default_size(1000, 640)
+    win.connect("destroy", Gtk.main_quit)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    box.set_border_width(8)
+    win.add(box)
+    entry = Gtk.SearchEntry()
+    entry.set_placeholder_text("Поиск по названию, пакету, описанию" if RU else "Search")
+    box.pack_start(entry, False, False, 0)
+    notebook = Gtk.Notebook()
+    box.pack_start(notebook, True, True, 0)
+    status = Gtk.Label(xalign=0)
+    box.pack_start(status, False, False, 0)
+    views = []
+
+    def add_tab(title, cols, rows, sort_hidden=None):
+        n = len(cols)
+        store = Gtk.ListStore(*([str] * n + ([int] if sort_hidden is not None else [])))
+        for r in rows:
+            vals = [str(x) for x in r[:n]]
+            store.append(vals + ([int(r[sort_hidden])] if sort_hidden is not None else []))
+        flt = store.filter_new()
+
+        def visible(model, it, _data=None):
+            q = entry.get_text().strip().lower()
+            return not q or any(q in (model[it][i] or "").lower() for i in range(n))
+
+        flt.set_visible_func(visible)
+        tree = Gtk.TreeView(model=Gtk.TreeModelSort(model=flt))  # сортировка по клику на заголовок
+        for i, c in enumerate(cols):
+            col = Gtk.TreeViewColumn(c, Gtk.CellRendererText(), text=i)
+            col.set_resizable(True)
+            col.set_sort_column_id(n if (sort_hidden is not None and c == cols[sort_hidden_col.get(title, -1)]) else i)
+            tree.append_column(col)
+        scroll = Gtk.ScrolledWindow()
+        scroll.add(tree)
+        notebook.append_page(scroll, Gtk.Label(label="%s (%d)" % (title, len(rows))))
+        views.append(flt)
+
+    sort_hidden_col = {}
+    add_tab("Приложения" if RU else "Apps", ["Название", "Описание", "Источник", "Пакет / ссылка", "Версия"], launchers())
+    pk = packages()
+    sort_hidden_col["Все пакеты" if RU else "All packages"] = 2
+    add_tab("Все пакеты" if RU else "All packages", ["Пакет", "Версия", "Размер", "Описание"],
+            [(p[0], p[1], human(p[2]), p[3], p[2]) for p in pk], sort_hidden=4)
+    add_tab("Flatpak", ["Название", "Ссылка", "Версия", "Ветка", "Установка", "Размер"], flatpaks())
+
+    def update_status(*_):
+        cur = notebook.get_current_page()
+        shown = len(views[cur]) if 0 <= cur < len(views) else 0
+        status.set_text(("Показано: %d" if RU else "Shown: %d") % shown)
+
+    def on_search(*_):
+        for v in views:
+            v.refilter()
+        update_status()
+
+    entry.connect("search-changed", on_search)
+    notebook.connect("switch-page", lambda *_: update_status())
+    win.show_all()
+    update_status()
+    Gtk.main()
+
 
 if __name__ == "__main__":
-    for p in sys.argv[1:]:
-        flip(p)
-FLIPPY
-    find "$tmp/usr/share/icons" "$tmp/usr/share/pixmaps" -name 'lucix*.png' -print0 2>/dev/null | xargs -0 -r python3 "$flip"
-    rm -f "$flip"
-    [[ -f "$tmp/usr/share/icons/hicolor/256x256/apps/lucix.png" ]] || { echo "нет значка lucix"; exit 1; }
-    #«Автозагрузка» как приложение: открывает настройки автозапуска Plasma
-    cat > "$tmp/usr/share/applications/lucix-autostart.desktop" <<'AUTOSTARTAPP'
+    main()
+LUCIXAPPS
+    chmod 0755 "$tmp/usr/bin/lucix-apps"
+    cat > "$tmp/usr/share/applications/lucix-apps.desktop" <<'APPSDESKTOP'
 [Desktop Entry]
 Type=Application
-Name=Автозагрузка
-Comment=Какие программы запускаются при входе в систему
-Exec=kcmshell6 autostart
-Icon=system-run
-Categories=Settings;System;
+Name=Все приложения
+Comment=Полный список приложений и пакетов в системе
+Exec=lucix-apps
+Icon=view-list-details
+Categories=System;Settings;
 Terminal=false
-AUTOSTARTAPP
+APPSDESKTOP
+    cat > "$tmp/usr/share/lucix/snapshots-clear.py" <<'SNAPPY'
+#!/usr/bin/env python3
+"""Lucix: удалить все снимки системы (Timeshift) одной кнопкой."""
+import shutil
+import subprocess
+import sys
+
+TITLE = "--title=Снимки системы"
+
+
+def zen(*args):
+    return subprocess.run(["zenity", TITLE, "--width=460"] + list(args))
+
+
+def main():
+    if not shutil.which("timeshift"):
+        zen("--error", "--text=Timeshift не установлен, снимков нет.")
+        return 1
+    r = zen("--question", "--ok-label=Удалить всё", "--cancel-label=Отмена",
+            "--text=Удалить ВСЕ снимки системы (Timeshift)?\n\nМесто освободится, но откатиться к ним будет уже нельзя.")
+    if r.returncode != 0:
+        return 0
+    p = subprocess.run(["pkexec", "timeshift", "--delete-all", "--scripted"], capture_output=True, text=True)
+    if p.returncode == 0:
+        zen("--info", "--text=Все снимки удалены.")
+    else:
+        zen("--error", "--text=Не получилось удалить:\n" + (p.stderr or p.stdout).strip()[-400:])
+    return p.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+SNAPPY
+    cat > "$tmp/usr/share/applications/lucix-snapshots-clear.desktop" <<'SNAPDESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Очистить снимки системы
+Comment=Удалить все снимки Timeshift
+Exec=python3 /usr/share/lucix/snapshots-clear.py
+Icon=edit-clear-history
+Categories=System;Settings;
+Terminal=false
+SNAPDESKTOP
+    cat > "$tmp/usr/share/lucix/trash-clean.sh" <<'TRASHSH'
+#!/bin/sh
+# Lucix: мгновенная очистка корзины. Запускается сама, как только в корзину что-то попало.
+T="${XDG_DATA_HOME:-$HOME/.local/share}/Trash"
+[ -d "$T" ] || exit 0
+rm -rf -- "$T/files/"* "$T/files/".[!.]* "$T/info/"* "$T/info/".[!.]* 2>/dev/null
+rm -f -- "$T/directorysizes" 2>/dev/null
+exit 0
+TRASHSH
+    chmod 0755 "$tmp/usr/share/lucix/trash-clean.sh"
+    cat > "$tmp/usr/lib/systemd/user/lucix-trash-clean.path" <<'TRASHPATH'
+[Unit]
+Description=Lucix: мгновенная очистка корзины
+
+[Path]
+PathChanged=%h/.local/share/Trash/files
+MakeDirectory=true
+
+[Install]
+WantedBy=default.target
+TRASHPATH
+    cat > "$tmp/usr/lib/systemd/user/lucix-trash-clean.service" <<'TRASHSERVICE'
+[Unit]
+Description=Lucix: очистка корзины
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/lucix/trash-clean.sh
+TRASHSERVICE
+    ln -sf /usr/lib/systemd/user/lucix-trash-clean.path "$tmp/etc/systemd/user/default.target.wants/lucix-trash-clean.path"
+    #«Диагностики Lucix» больше нет
+    rm -f "$tmp/usr/bin/lucix-diag" "$tmp/usr/share/applications/lucix-diag.desktop" "$tmp/etc/skel/Desktop/lucix-diag.desktop"
+    #курсор по умолчанию: если в проекте лежит branding/cursor.zip (набор курсоров Windows), конвертируем его при сборке
+    if [[ -f "$ROOT_DIR/branding/cursor.zip" ]]; then
+      python3 -c 'import PIL' 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages pillow || echo "Pillow недоступен, курсор по умолчанию пропущен"
+      python3 - "$ROOT_DIR/branding/cursor.zip" "$tmp/usr/share/icons/Lucix-Cursor" "$tmp/usr/share/lucix/install-cursor.py" <<'PYCURSOR'
+import importlib.util, os, sys, tempfile, zipfile
+zip_path, out_dir, script = sys.argv[1:4]
+try:
+    import PIL
+except ImportError:
+    print("Pillow недоступен, курсор по умолчанию пропущен")
+    sys.exit(0)
+spec = importlib.util.spec_from_file_location("ic", script)
+ic = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ic)
+with tempfile.TemporaryDirectory() as t:
+    zipfile.ZipFile(zip_path).extractall(t)
+    d = ic.find_windows_dir(t)
+    assert d, "в cursor.zip нет курсоров Windows"
+    os.makedirs(out_dir, exist_ok=True)
+    print("курсор Lucix-Cursor: %d шт" % ic.convert_windows(d, out_dir, "Lucix-Cursor"))
+PYCURSOR
+    fi
     #в проекте только Plasma: старые файлы Nemo из packaging в пакет не попадают
     rm -rf "$tmp/usr/share/nemo"
   fi
@@ -1235,7 +1667,7 @@ Architecture: all
 Maintainer: Lucix <lucovisa@users.noreply.github.com>
 Depends: lucix-base
 Description: Lucix system defaults
- Sets us+ru keyboard layouts with Alt+Shift switching for the login screen and console.
+ Sets us+ru keyboard layouts with Alt+Shift switching and turns off a few unneeded background services.
 SYCONTROL
 cat > "$sy/DEBIAN/postinst" <<'SYPOST'
 #!/bin/sh
@@ -1248,6 +1680,15 @@ if [ "$1" = configure ] && [ -f /etc/default/keyboard ] && [ ! -e /var/lib/lucix
   sed -i 's/^XKBVARIANT=.*/XKBVARIANT=""/' /etc/default/keyboard
   mkdir -p /var/lib/lucix
   touch /var/lib/lucix/keyboard-set
+fi
+if [ "$1" = configure ] && [ ! -e /var/lib/lucix/services-set ]; then
+  for u in apport.service whoopsie.service motd-news.timer ua-timer.timer; do
+    if systemctl list-unit-files "$u" 2>/dev/null | grep -q "^$u"; then
+      systemctl disable --now "$u" >/dev/null 2>&1 || true
+    fi
+  done
+  mkdir -p /var/lib/lucix
+  touch /var/lib/lucix/services-set
 fi
 exit 0
 SYPOST
