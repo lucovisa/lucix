@@ -30,7 +30,7 @@ helper = root + "/usr/lib/lucix/lucix-helper"
 apps = root + "/usr/share/lucix/apps.json"
 
 FUNCS = '''#KDE-приложения и обновление Flatpak после установки драйвера
-PLASMA_EXTRAS = ["dolphin", "konsole", "kate", "ark", "okular", "kde-spectacle", "plasma-systemmonitor",
+PLASMA_EXTRAS = ["dolphin", "konsole", "kate", "ark", "okular", "flameshot", "plasma-systemmonitor",
                  "kscreen", "plasma-nm", "plasma-pa", "powerdevil", "bluedevil", "kio-extras", "ffmpegthumbs",
                  "kde-config-gtk-style", "breeze-gtk-theme", "xdg-desktop-portal-kde", "xdg-desktop-portal-gtk",
                  "keyd", "vlc"]
@@ -39,6 +39,29 @@ PLASMA_EXTRAS = ["dolphin", "konsole", "kate", "ark", "okular", "kde-spectacle",
 def flatpak_refresh():
     if shutil.which("flatpak"):
         run(["flatpak", "update", "-y", "--noninteractive"])
+
+
+UNNEEDED = ["qrca", "kde-spectacle", "gnome-system-monitor", "gwenview"]
+PROTECTED = ("kde-plasma-desktop", "plasma-desktop", "plasma-workspace", "lucix-base", "lucix-updater",
+             "lucix-system", "lucix-branding", "lightdm", "sddm", "kwin-x11", "plasma-session-x11", "flameshot")
+
+
+def post_purge_unneeded():
+    r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Package}\\n"] + UNNEEDED,
+                       capture_output=True, text=True)
+    installed = [l.split()[1] for l in r.stdout.splitlines() if l.startswith("ii ") and len(l.split()) == 2]
+    if not installed:
+        say("nothing to remove")
+        return True
+    sim = subprocess.run(["apt-get", "-s", "purge"] + installed, capture_output=True, text=True, env=ENV)
+    removed = [l.split()[1] for l in sim.stdout.splitlines() if l.startswith("Purg ")]
+    bad = [p for p in removed if p in PROTECTED]
+    if bad:
+        say("refusing, it would also remove: %s" % ", ".join(bad))
+        return False
+    if run(["apt-get"] + APT_OPTS + ["purge"] + installed) != 0:
+        return False
+    return run(["apt-get"] + APT_OPTS + ["autoremove", "--purge"]) == 0
 
 
 def post_plasma_extras():
@@ -60,7 +83,7 @@ def post_plasma_extras():
 h = open(helper, encoding="utf-8").read()
 if "def post_plasma_extras" not in h:
     assert h.count("POST = {\n") == 1, "в хелпере не найден блок POST"
-    h = h.replace("POST = {\n", FUNCS + 'POST = {\n    "plasma-extras": post_plasma_extras,\n', 1)
+    h = h.replace("POST = {\n", FUNCS + 'POST = {\n    "plasma-extras": post_plasma_extras,\n    "purge-unneeded": post_purge_unneeded,\n', 1)
     #после установки драйвера NVIDIA Flatpak-приложениям (Steam и др.) нужно подходящее расширение драйвера
     m = re.search(r"def drivers_install\(snap\):\n.*?\n\n\n", h, re.S)
     assert m, "в хелпере не найден drivers_install"
@@ -80,6 +103,15 @@ if not any(a.get("id") == "kde-apps" for a in d["apps"]):
         "default": True,
         "check": {"apt": ["kate", "dolphin", "konsole", "ark"]},
         "steps": [{"method": "post", "name": "plasma-extras"}]})
+if not any(a.get("id") == "cleanup" for a in d["apps"]):
+    d["apps"].append({
+        "id": "cleanup",
+        "name": ["Remove unneeded apps (Qrca, Spectacle, GNOME monitor, Gwenview)",
+                 "Убрать ненужное (Qrca, Spectacle, монитор GNOME, Gwenview)"],
+        "desc": ["Removes duplicate and unused apps. Refuses if it would remove anything important",
+                 "Удаляет дубли и ненужные программы. Откажется, если вместе с ними пришлось бы удалить что-то важное"],
+        "default": True,
+        "steps": [{"method": "post", "name": "purge-unneeded"}]})
 json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYUPDATER
     #вкладка «Система»: показываем список обновляемых пакетов, а не только их число
@@ -236,16 +268,16 @@ import sys
 import tempfile
 
 TITLE = "Курсор мыши"
-SIZES = (24, 32, 48, 64)
+SIZES = (24, 28, 32, 36, 40, 48, 64)
 
 #роль в Windows -> (имя курсора в Linux, дополнительные имена)
 ROLES = {
-    "arrow": ("left_ptr", ["default", "arrow", "top_left_arrow", "left_arrow"]),
+    "arrow": ("left_ptr", ["default", "arrow", "top_left_arrow", "left_arrow", "context-menu", "copy", "dnd-copy", "dnd-none", "draft"]),
     "help": ("help", ["question_arrow", "whats_this", "left_ptr_help"]),
     "appstarting": ("left_ptr_watch", ["progress", "half-busy"]),
     "wait": ("watch", ["wait"]),
-    "crosshair": ("crosshair", ["cross", "tcross", "cross_reverse", "diamond_cross"]),
-    "ibeam": ("text", ["xterm", "ibeam"]),
+    "crosshair": ("crosshair", ["cross", "tcross", "cross_reverse", "diamond_cross", "cell", "zoom-in", "zoom-out", "color-picker"]),
+    "ibeam": ("text", ["xterm", "ibeam", "vertical-text"]),
     "nwpen": ("pencil", []),
     "no": ("not-allowed", ["crossed_circle", "forbidden", "no-drop", "dnd-no-drop", "circle"]),
     "sizens": ("ns-resize", ["sb_v_double_arrow", "size_ver", "v_double_arrow", "double_arrow", "row-resize",
@@ -258,7 +290,7 @@ ROLES = {
                                  "top_right_corner", "bottom_left_corner"]),
     "sizeall": ("move", ["fleur", "all-scroll", "size_all", "grabbing", "closedhand", "dnd-move"]),
     "uparrow": ("up_arrow", ["center_ptr"]),
-    "hand": ("pointer", ["hand2", "hand1", "pointing_hand", "openhand", "grab"]),
+    "hand": ("pointer", ["hand2", "hand1", "pointing_hand", "openhand", "grab", "alias", "dnd-link", "link"]),
     "person": ("person", []),
     "pin": ("pin", []),
 }
@@ -685,34 +717,70 @@ def kickoff():
     js = ('var n = 0; var ps = panels(); for (var i = 0; i < ps.length; i++) {'
           ' var ws = ps[i].widgets("org.kde.plasma.kickoff");'
           ' for (var j = 0; j < ws.length; j++) { ws[j].currentConfigGroup = ["General"];'
-          ' ws[j].writeConfig("icon", "lucix"); ws[j].reloadConfig(); n++; } } n;')
+          ' ws[j].writeConfig("icon", "/usr/share/icons/hicolor/256x256/apps/lucix.png"); ws[j].reloadConfig(); n++; } } n;')
     if run("dbus-send", "--session", "--print-reply", "--dest=org.kde.plasmashell", "/PlasmaShell",
            "org.kde.PlasmaShell.evaluateScript", "string:" + js) != 0:
         return False
 
 
-def screenshot():
-    """Win+Shift+S: выделил область, и она сразу в буфере обмена (Ctrl+V вставляет)"""
-    if not (shutil.which("spectacle") and shutil.which("kwriteconfig6")):
-        return False
+def ini_set(path, section, values):
+    """меняет только нужные ключи в ini, остальное (кнопки Flameshot и т.д.) не трогает"""
     try:
-        p = subprocess.run(["spectacle", "--help"], capture_output=True, text=True, timeout=30)
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    head = "[%s]" % section
+    start = next((i for i, l in enumerate(lines) if l.strip() == head), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(head)
+        lines += ["%s=%s" % kv for kv in values.items()]
+    else:
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+        for k, v in values.items():
+            for i in range(start + 1, end):
+                if lines[i].split("=", 1)[0].strip() == k:
+                    lines[i] = "%s=%s" % (k, v)
+                    break
+            else:
+                lines.insert(start + 1, "%s=%s" % (k, v))
+                end += 1
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def screenshot():
+    """Print Screen и Win+Shift+S: выделил область, и она сразу в буфере (Ctrl+V вставляет); Ctrl+Print весь экран. Flameshot"""
+    if not (shutil.which("flameshot") and shutil.which("kwriteconfig6")):
+        log("flameshot не установлен, скриншоты настрою позже")
+        return False
+    ini_set(os.path.join(HOME, ".config", "flameshot", "flameshot.ini"), "General", {
+        "showHelp": "false", "showStartupLaunchMessage": "false",
+        "showDesktopNotification": "false", "disabledTrayIcon": "true"})
+    try:
+        p = subprocess.run(["flameshot", "gui", "--help"], capture_output=True, text=True, timeout=30)
         text = p.stdout + p.stderr
     except (OSError, subprocess.TimeoutExpired):
         text = ""
-    flag = "--copy-image" if "--copy-image" in text else ("--clipboard" if "--clipboard" in text else "")
-    cmd = "spectacle --background --region" + (" " + flag if flag else "")
-    if not flag:
-        log("spectacle без ключа копирования в буфер, область откроется в окне Spectacle")
-        cmd = "spectacle --region"
+    region = "flameshot gui --accept-on-select -c" if "accept-on-select" in text else "flameshot gui -c"
     d = os.path.join(HOME, ".local", "share", "applications")
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "lucix-screenshot.desktop"), "w", encoding="utf-8") as f:
-        f.write("[Desktop Entry]\nType=Application\nName=Скриншот области\nExec=%s\nIcon=spectacle\nNoDisplay=true\n" % cmd)
+    for fname, title, cmd in (("lucix-screenshot.desktop", "Скриншот области", region),
+                              ("lucix-screenshot-full.desktop", "Скриншот всего экрана", "flameshot full -c")):
+        with open(os.path.join(d, fname), "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=%s\nExec=%s\nIcon=flameshot\nNoDisplay=true\n" % (title, cmd))
     if shutil.which("kbuildsycoca6"):
         run("kbuildsycoca6")
     run("kwriteconfig6", "--file", "kglobalshortcutsrc", "--group", "services",
-        "--group", "lucix-screenshot.desktop", "--key", "_launch", "Meta+Shift+S")
+        "--group", "lucix-screenshot.desktop", "--key", "_launch", "Meta+Shift+S\tPrint")
+    run("kwriteconfig6", "--file", "kglobalshortcutsrc", "--group", "services",
+        "--group", "lucix-screenshot-full.desktop", "--key", "_launch", "Ctrl+Print")
+    #если Spectacle ещё не удалён, он не должен перехватывать Print Screen
+    run("kwriteconfig6", "--file", "kglobalshortcutsrc", "--group", "services",
+        "--group", "org.kde.spectacle.desktop", "--key", "_launch", "none")
     run("systemctl", "--user", "restart", "plasma-kglobalaccel.service")
 
 
@@ -837,7 +905,7 @@ PANEL_JS = (
     ' var lead = p.addWidget("org.kde.plasma.panelspacer"); lead.currentConfigGroup = ["General"];'
     ' lead.writeConfig("expanding", false); lead.writeConfig("length", 230);'
     ' p.addWidget("org.kde.plasma.panelspacer");'
-    ' var k = p.addWidget("org.kde.plasma.kickoff"); k.currentConfigGroup = ["General"]; k.writeConfig("icon", "lucix");'
+    ' var k = p.addWidget("org.kde.plasma.kickoff"); k.currentConfigGroup = ["General"]; k.writeConfig("icon", "/usr/share/icons/hicolor/256x256/apps/lucix.png");'
     ' var t = p.addWidget("org.kde.plasma.icontasks");'
     ' if (launchers) { t.currentConfigGroup = ["General"]; t.writeConfig("launchers", launchers); }'
     ' p.addWidget("org.kde.plasma.panelspacer");'
@@ -846,8 +914,10 @@ PANEL_JS = (
     ' "org.kde.plasma.bluetooth", "org.kde.plasma.notifications", "org.kde.plasma.clipboard", "org.kde.plasma.devicenotifier",'
     ' "org.kde.plasma.keyboardlayout", "org.kde.plasma.keyboardindicator", "org.kde.plasma.brightness",'
     ' "org.kde.plasma.printmanager", "org.kde.kscreen", "org.kde.plasma.manage-inputmethod"]);'
-    ' tray.writeConfig("hiddenItems", ["org.kde.plasma.mediacontroller"]);'
-    ' p.addWidget("org.kde.plasma.digitalclock");'
+    ' tray.writeConfig("hiddenItems", ["org.kde.plasma.mediacontroller", "org.kde.plasma.volume",'
+    ' "org.kde.plasma.devicenotifier", "org.kde.plasma.clipboard"]);'
+    ' var clock = p.addWidget("org.kde.plasma.digitalclock"); clock.currentConfigGroup = ["Appearance"];'
+    ' clock.writeConfig("autoFontAndSize", false); clock.writeConfig("fontSize", 10);'
     ' "ok widgets=" + p.widgets().length + " bad=" + bad.join(","); }'
 )
 
@@ -902,14 +972,22 @@ def sounds():
         run("xset", "b", "off")
 
 
+CURSOR_SIZE = "32"
+
+
 def cursor():
-    """курсор Lucix по умолчанию (если он есть в системе); сменить можно в настройках в любой момент"""
-    if not os.path.isdir("/usr/share/icons/Lucix-Cursor"):
-        return False  # курсора в системе пока нет, проверим при следующем входе
-    if not shutil.which("plasma-apply-cursortheme"):
+    """курсор Lucix по умолчанию (если он есть) и средний размер; сменить можно в настройках в любой момент"""
+    theme = "Lucix-Cursor" if os.path.isdir("/usr/share/icons/Lucix-Cursor") else ""
+    if not theme and shutil.which("kreadconfig6"):
+        theme = subprocess.run(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"],
+                               capture_output=True, text=True).stdout.strip()
+    if not theme or not shutil.which("plasma-apply-cursortheme"):
         return False
-    if run("plasma-apply-cursortheme", "Lucix-Cursor") != 0:
-        return False
+    if shutil.which("kwriteconfig6"):
+        run("kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", CURSOR_SIZE)
+    if run("plasma-apply-cursortheme", "--size", CURSOR_SIZE, theme) != 0:
+        if run("plasma-apply-cursortheme", theme) != 0:
+            return False
 
 
 def trash():
@@ -917,8 +995,9 @@ def trash():
     if not os.path.isfile("/usr/lib/systemd/user/lucix-trash-clean.path"):
         return False
     run("systemctl", "--user", "daemon-reload")
-    if run("systemctl", "--user", "enable", "--now", "lucix-trash-clean.path") != 0:
+    if run("systemctl", "--user", "enable", "lucix-trash-clean.path") != 0:
         return False
+    run("systemctl", "--user", "restart", "lucix-trash-clean.path")
 
 
 VIDEO_MIMES = ("video/mp4", "video/x-matroska", "video/webm", "video/x-msvideo", "video/quicktime",
@@ -937,7 +1016,8 @@ def privacy():
     """на экране блокировки и в меню не показывается, что ты смотришь или слушаешь"""
     if not shutil.which("kwriteconfig6"):
         return False
-    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Greeter", "--key", "ShowMediaControls", "false")
+    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Greeter", "--group", "LnF",
+        "--group", "General", "--key", "showMediaControls", "false")
 
 
 AUTOSTART_OFF = ("org.kde.kdeconnect.daemon.desktop", "kdeconnectd.desktop", "xwaylandvideobridge.desktop",
@@ -967,6 +1047,60 @@ def cleanup():
         if os.path.isfile(p):
             os.remove(p)
             log("удалён %s" % p)
+
+
+def iconcache():
+    """сбрасываем кэш значков Plasma, чтобы значок Lucix обновился (зеркальный уроборос)"""
+    p = os.path.join(HOME, ".cache", "icon-cache.kcache")
+    if os.path.isfile(p):
+        os.remove(p)
+        log("удалён кэш значков")
+    if shutil.which("kbuildsycoca6"):
+        run("kbuildsycoca6", "--noincremental")
+
+
+HIDE_APPS = ("org.kde.spectacle.desktop", "org.kde.qrca.desktop", "org.gnome.SystemMonitor.desktop",
+             "org.kde.gwenview.desktop")
+
+
+def hideapps():
+    """прячем из меню ненужное, пока оно не удалено (Spectacle, Qrca, монитор GNOME, Gwenview)"""
+    d = os.path.join(HOME, ".local", "share", "applications")
+    for name in HIDE_APPS:
+        if os.path.isfile(os.path.join("/usr/share/applications", name)):
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                f.write("[Desktop Entry]\nType=Application\nName=hidden\nHidden=true\n")
+
+
+def animations():
+    """плавное сворачивание, разворачивание и открытие окон и меню Пуск"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    for key, val in (("squashEnabled", "true"), ("magiclampEnabled", "false"), ("slidingpopupsEnabled", "true"),
+                     ("kwin4_effect_fadeEnabled", "true"), ("kwin4_effect_scaleEnabled", "false")):
+        run("kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", key, val)
+    run("kwriteconfig6", "--file", "kwinrc", "--group", "Compositing", "--key", "LatencyPolicy", "High")
+    run("kwriteconfig6", "--file", "kdeglobals", "--group", "KDE", "--key", "AnimationDurationFactor", "1")
+    run("dbus-send", "--session", "--dest=org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
+
+
+def plasmatheme():
+    """тема Plasma с полностью прозрачной нижней панелью"""
+    if not os.path.isdir("/usr/share/plasma/desktoptheme/Lucix"):
+        return False
+    if not shutil.which("plasma-apply-desktoptheme"):
+        return False
+    if run("plasma-apply-desktoptheme", "Lucix") != 0:
+        return False
+
+
+def notifications():
+    """уведомления отключены (режим «Не беспокоить» навсегда), критические показываются"""
+    if not shutil.which("kwriteconfig6"):
+        return False
+    run("kwriteconfig6", "--file", "plasmanotifyrc", "--group", "DoNotDisturb", "--key", "Until", "2099-12-31T23:59:59")
+    run("kwriteconfig6", "--file", "plasmanotifyrc", "--group", "Notifications", "--key", "CriticalInDndMode", "true")
 
 
 def terminal():
@@ -999,23 +1133,28 @@ STEPS = (
     ("focus", 1, focus),
     ("wallpaper", 1, wallpaper),
     ("colors", 1, colors),
-    ("kickoff", 1, kickoff),
-    ("screenshot", 1, screenshot),
+    ("kickoff", 2, kickoff),
+    ("screenshot", 2, screenshot),
     ("videos", 2, videos),
     ("keyboard", 1, keyboard),
     ("apps", 3, apps),
-    ("panel", 3, panel),
+    ("panel", 4, panel),
     ("kbdisplay", 2, kbdisplay),
     ("lockwall", 1, lockwall),
     ("kwin", 1, kwin),
     ("sounds", 1, sounds),
-    ("cursor", 1, cursor),
-    ("trash", 1, trash),
-    ("privacy", 1, privacy),
+    ("cursor", 2, cursor),
+    ("trash", 2, trash),
+    ("privacy", 2, privacy),
     ("memory", 1, memory),
     ("cleanup", 1, cleanup),
     ("terminal", 1, terminal),
     ("power", 1, power),
+    ("iconcache", 1, iconcache),
+    ("hideapps", 1, hideapps),
+    ("animations", 1, animations),
+    ("plasmatheme", 1, plasmatheme),
+    ("notifications", 1, notifications),
 )
 
 
@@ -1238,7 +1377,7 @@ Terminal=false
 KEYSDESKTOP
     #обязательные пакеты: keyd (клавиши), vlc (видео), python3-pil (курсоры Windows), flatpak (магазин), база Plasma,
     #значок Wi-Fi и громкость, окна выбора файлов («Обзор») в Flatpak и GTK-приложениях
-    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, kde-spectacle, xdg-desktop-portal-kde, xdg-desktop-portal-gtk/' "$tmp/DEBIAN/control"
+    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, flameshot, xdg-desktop-portal-kde, xdg-desktop-portal-gtk/' "$tmp/DEBIAN/control"
     #желательные: если их нет в репозитории, обновление всё равно пройдёт
     sed -i 's/^Recommends: .*/&, ffmpegthumbnailer, gstreamer1.0-libav, alsa-utils, okular/' "$tmp/DEBIAN/control"
     grep -q '^Depends: .*keyd.*portal-gtk' "$tmp/DEBIAN/control" || { echo "не удалось дописать Depends"; exit 1; }
@@ -1515,7 +1654,7 @@ TRASHSH
 Description=Lucix: мгновенная очистка корзины
 
 [Path]
-PathChanged=%h/.local/share/Trash/files
+DirectoryNotEmpty=%h/.local/share/Trash/files
 MakeDirectory=true
 
 [Install]
@@ -1554,6 +1693,41 @@ with tempfile.TemporaryDirectory() as t:
     print("курсор Lucix-Cursor: %d шт" % ic.convert_windows(d, out_dir, "Lucix-Cursor"))
 PYCURSOR
     fi
+    #тема Plasma Lucix: полностью прозрачная нижняя панель (всё остальное берётся из стандартной темы)
+    for sub in "widgets" "translucent/widgets"; do mkdir -p "$tmp/usr/share/plasma/desktoptheme/Lucix/$sub"; done
+    cat > "$tmp/usr/share/plasma/desktoptheme/Lucix/metadata.json" <<'THEMEJSON'
+{
+    "KPlugin": {
+        "Authors": [{"Name": "Lucix"}],
+        "Description": "Lucix: transparent panel",
+        "Id": "Lucix",
+        "License": "MIT",
+        "Name": "Lucix",
+        "Version": "1.0",
+        "Website": "https://github.com/lucovisa/lucix"
+    }
+}
+THEMEJSON
+    cat > "$tmp/usr/share/plasma/desktoptheme/Lucix/widgets/panel-background.svg" <<'THEMESVG'
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <g fill="#000000" fill-opacity="0">
+    <rect id="topleft" x="0" y="0" width="8" height="8"/>
+    <rect id="top" x="8" y="0" width="48" height="8"/>
+    <rect id="topright" x="56" y="0" width="8" height="8"/>
+    <rect id="left" x="0" y="8" width="8" height="48"/>
+    <rect id="center" x="8" y="8" width="48" height="48"/>
+    <rect id="right" x="56" y="8" width="8" height="48"/>
+    <rect id="bottomleft" x="0" y="56" width="8" height="8"/>
+    <rect id="bottom" x="8" y="56" width="48" height="8"/>
+    <rect id="bottomright" x="56" y="56" width="8" height="8"/>
+  </g>
+  <rect id="hint-top-margin" x="0" y="0" width="64" height="2" fill="none"/>
+  <rect id="hint-bottom-margin" x="0" y="0" width="64" height="2" fill="none"/>
+  <rect id="hint-left-margin" x="0" y="0" width="2" height="64" fill="none"/>
+  <rect id="hint-right-margin" x="0" y="0" width="2" height="64" fill="none"/>
+</svg>
+THEMESVG
+    cp "$tmp/usr/share/plasma/desktoptheme/Lucix/widgets/panel-background.svg" "$tmp/usr/share/plasma/desktoptheme/Lucix/translucent/widgets/panel-background.svg"
     #в проекте только Plasma: старые файлы Nemo из packaging в пакет не попадают
     rm -rf "$tmp/usr/share/nemo"
   fi
