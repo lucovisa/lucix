@@ -255,7 +255,8 @@ def lucix_update(tag, snap):
     if "SHA256SUMS" not in assets or not debs:
         say("release has no packages")
         return 2
-    for name in debs + ["SHA256SUMS"]:
+    need = debs + ["SHA256SUMS"]
+    for name in need:
         if not NAME_RE.match(name) or not assets[name].startswith(PREFIX):
             say("unexpected asset " + name)
             return 2
@@ -263,16 +264,17 @@ def lucix_update(tag, snap):
     work = tempfile.mkdtemp(prefix="lucix-upd-")
     os.chmod(work, 0o755)
     try:
-        for name in debs + ["SHA256SUMS"]:
+        for name in need:
             say("download " + name)
             download(assets[name], os.path.join(work, name))
+
 
         with open(os.path.join(work, "SHA256SUMS")) as f:
             sums = parse_sums(f.read())
         paths = []
         for name in debs:
             path = os.path.join(work, name)
-            if sha256_file(path) not in sums.values():
+            if sums.get(name) != sha256_file(path):
                 say("checksum mismatch " + name)
                 return 2
             if not package_name(path).startswith("lucix-"):

@@ -41,29 +41,6 @@ def flatpak_refresh():
         run(["flatpak", "update", "-y", "--noninteractive"])
 
 
-UNNEEDED = ["qrca", "kde-spectacle", "gnome-system-monitor", "gwenview"]
-PROTECTED = ("kde-plasma-desktop", "plasma-desktop", "plasma-workspace", "lucix-base", "lucix-updater",
-             "lucix-system", "lucix-branding", "lightdm", "sddm", "kwin-x11", "plasma-session-x11", "flameshot")
-
-
-def post_purge_unneeded():
-    r = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev} ${Package}\\n"] + UNNEEDED,
-                       capture_output=True, text=True)
-    installed = [l.split()[1] for l in r.stdout.splitlines() if l.startswith("ii ") and len(l.split()) == 2]
-    if not installed:
-        say("nothing to remove")
-        return True
-    sim = subprocess.run(["apt-get", "-s", "purge"] + installed, capture_output=True, text=True, env=ENV)
-    removed = [l.split()[1] for l in sim.stdout.splitlines() if l.startswith("Purg ")]
-    bad = [p for p in removed if p in PROTECTED]
-    if bad:
-        say("refusing, it would also remove: %s" % ", ".join(bad))
-        return False
-    if run(["apt-get"] + APT_OPTS + ["purge"] + installed) != 0:
-        return False
-    return run(["apt-get"] + APT_OPTS + ["autoremove", "--purge"]) == 0
-
-
 def post_plasma_extras():
     avail = []
     for pkg in PLASMA_EXTRAS:
@@ -83,7 +60,7 @@ def post_plasma_extras():
 h = open(helper, encoding="utf-8").read()
 if "def post_plasma_extras" not in h:
     assert h.count("POST = {\n") == 1, "в хелпере не найден блок POST"
-    h = h.replace("POST = {\n", FUNCS + 'POST = {\n    "plasma-extras": post_plasma_extras,\n    "purge-unneeded": post_purge_unneeded,\n', 1)
+    h = h.replace("POST = {\n", FUNCS + 'POST = {\n    "plasma-extras": post_plasma_extras,\n', 1)
     #после установки драйвера NVIDIA Flatpak-приложениям (Steam и др.) нужно подходящее расширение драйвера
     m = re.search(r"def drivers_install\(snap\):\n.*?\n\n\n", h, re.S)
     assert m, "в хелпере не найден drivers_install"
@@ -103,15 +80,7 @@ if not any(a.get("id") == "kde-apps" for a in d["apps"]):
         "default": True,
         "check": {"apt": ["kate", "dolphin", "konsole", "ark"]},
         "steps": [{"method": "post", "name": "plasma-extras"}]})
-if not any(a.get("id") == "cleanup" for a in d["apps"]):
-    d["apps"].append({
-        "id": "cleanup",
-        "name": ["Remove unneeded apps (Qrca, Spectacle, GNOME monitor, Gwenview)",
-                 "Убрать ненужное (Qrca, Spectacle, монитор GNOME, Gwenview)"],
-        "desc": ["Removes duplicate and unused apps. Refuses if it would remove anything important",
-                 "Удаляет дубли и ненужные программы. Откажется, если вместе с ними пришлось бы удалить что-то важное"],
-        "default": True,
-        "steps": [{"method": "post", "name": "purge-unneeded"}]})
+d["apps"] = [a for a in d["apps"] if a.get("id") != "cleanup"]
 json.dump(d, open(apps, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PYUPDATER
     #вкладка «Система»: показываем список обновляемых пакетов, а не только их число
@@ -639,8 +608,10 @@ DOLPHINADMIN
 """Lucix: настройки сеанса KDE Plasma. Запускается только внутри Plasma.
 У каждого шага своя версия: он выполняется один раз и не трогает то, что ты поменяешь руками.
 Шаг, который сейчас сделать нельзя, повторяется при следующем входе."""
+import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -668,6 +639,22 @@ def run(*cmd, timeout=60):
     out = p.stdout.strip().replace("\n", " ")[:200]
     log("%s -> rc=%s %s %s" % (" ".join(cmd)[:160], p.returncode, p.stderr.strip(), out))
     return p.returncode
+
+
+def plasma_eval(js):
+    """выполняет скрипт внутри plasmashell, возвращает текст ответа или None"""
+    if not shutil.which("dbus-send"):
+        return None
+    try:
+        p = subprocess.run(["dbus-send", "--session", "--print-reply", "--dest=org.kde.plasmashell", "/PlasmaShell",
+                            "org.kde.PlasmaShell.evaluateScript", "string:" + js],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("evaluateScript -> %r" % (e,))
+        return None
+    out = p.stdout.strip().replace("\n", " ")[:200]
+    log("evaluateScript -> rc=%s %s %s" % (p.returncode, p.stderr.strip(), out))
+    return out if p.returncode == 0 else None
 
 
 HOME_APPS = ("org.mozilla.firefox", "com.google.Chrome", "com.discordapp.Discord")
@@ -917,7 +904,7 @@ PANEL_JS = (
     ' tray.writeConfig("hiddenItems", ["org.kde.plasma.mediacontroller", "org.kde.plasma.volume",'
     ' "org.kde.plasma.devicenotifier", "org.kde.plasma.clipboard"]);'
     ' var clock = p.addWidget("org.kde.plasma.digitalclock"); clock.currentConfigGroup = ["Appearance"];'
-    ' clock.writeConfig("autoFontAndSize", false); clock.writeConfig("fontSize", 10);'
+    ' clock.writeConfig("autoFontAndSize", false); clock.writeConfig("fontSize", 13);'
     ' "ok widgets=" + p.widgets().length + " bad=" + bad.join(","); }'
 )
 
@@ -931,12 +918,47 @@ def panel():
         return False
 
 
+KBD_JS = (
+    'var n = 0; var ps = panels();'
+    ' for (var i = 0; i < ps.length; i++) { var ws = ps[i].widgets();'
+    ' for (var j = 0; j < ws.length; j++) { if (ws[j].type != "org.kde.plasma.systemtray") { continue; }'
+    ' var id = ws[j].readConfig("SystrayContainmentId", 0); if (!id) { continue; }'
+    ' var sc = desktopById(id); if (!sc) { continue; }'
+    ' var ks = sc.widgets("org.kde.plasma.keyboardlayout");'
+    ' for (var k = 0; k < ks.length; k++) { ks[k].currentConfigGroup = ["General"];'
+    ' ks[k].writeConfig("displayStyle", 1); ks[k].reloadConfig(); n++; } } }'
+    ' "kbd=" + n;'
+)
+
+
 def kbdisplay():
-    """в индикаторе раскладки только флаг, без букв"""
-    if not shutil.which("kwriteconfig6"):
+    """в индикаторе раскладки только флаг, без букв (ключ displayStyle у апплета: 0 буквы, 1 флаг, 2 буквы на флаге)"""
+    if shutil.which("kwriteconfig6"):
+        run("kwriteconfig6", "--file", "kxkbrc", "--group", "Layout", "--key", "ShowLayoutIndicator", "true")
+    for _ in range(6):  # трей наполняется не сразу после входа
+        out = plasma_eval(KBD_JS)
+        m = re.search(r"kbd=(\d+)", out or "")
+        if m and int(m.group(1)) > 0:
+            return None
+        time.sleep(5)
+    log("апплет раскладки в трее не найден, повторю при следующем входе")
+    return False
+
+
+CLOCK_SIZE = 13
+
+
+def clock():
+    """размер часов в панели: среднее между слишком большим и слишком маленьким"""
+    js = ('var n = 0; var ps = panels(); for (var i = 0; i < ps.length; i++) {'
+          ' var ws = ps[i].widgets("org.kde.plasma.digitalclock");'
+          ' for (var j = 0; j < ws.length; j++) { ws[j].currentConfigGroup = ["Appearance"];'
+          ' ws[j].writeConfig("autoFontAndSize", false); ws[j].writeConfig("fontSize", %d);'
+          ' ws[j].reloadConfig(); n++; } } "clock=" + n;' % CLOCK_SIZE)
+    out = plasma_eval(js)
+    m = re.search(r"clock=(\d+)", out or "")
+    if not (m and int(m.group(1)) > 0):
         return False
-    for key, val in (("ShowFlag", "true"), ("ShowLabel", "false"), ("ShowLayoutIndicator", "true")):
-        run("kwriteconfig6", "--file", "kxkbrc", "--group", "Layout", "--key", key, val)
 
 
 def lockwall():
@@ -991,7 +1013,9 @@ def cursor():
 
 
 def trash():
-    """мгновенная очистка корзины (удалить файл = он сразу пропадает)"""
+    """в меню правой кнопки есть «Удалить» (мимо корзины); а всё, что попало в корзину, стирается сразу"""
+    if shutil.which("kwriteconfig6"):
+        run("kwriteconfig6", "--file", "kdeglobals", "--group", "KDE", "--key", "ShowDeleteCommand", "true")
     if not os.path.isfile("/usr/lib/systemd/user/lucix-trash-clean.path"):
         return False
     run("systemctl", "--user", "daemon-reload")
@@ -1078,8 +1102,10 @@ def animations():
     if not shutil.which("kwriteconfig6"):
         return False
     for key, val in (("squashEnabled", "true"), ("magiclampEnabled", "false"), ("slidingpopupsEnabled", "true"),
+                     ("fadingpopupsEnabled", "true"), ("maximizeEnabled", "true"),
                      ("kwin4_effect_fadeEnabled", "true"), ("kwin4_effect_scaleEnabled", "false")):
         run("kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", key, val)
+    run("kwriteconfig6", "--file", "kwinrc", "--group", "Compositing", "--key", "Enabled", "true")
     run("kwriteconfig6", "--file", "kwinrc", "--group", "Compositing", "--key", "LatencyPolicy", "High")
     run("kwriteconfig6", "--file", "kdeglobals", "--group", "KDE", "--key", "AnimationDurationFactor", "1")
     run("dbus-send", "--session", "--dest=org.kde.KWin", "/KWin", "org.kde.KWin.reconfigure")
@@ -1089,10 +1115,12 @@ def plasmatheme():
     """тема Plasma с полностью прозрачной нижней панелью"""
     if not os.path.isdir("/usr/share/plasma/desktoptheme/Lucix"):
         return False
-    if not shutil.which("plasma-apply-desktoptheme"):
+    if shutil.which("plasma-apply-desktoptheme") and run("plasma-apply-desktoptheme", "Lucix") == 0:
+        return None
+    if not shutil.which("kwriteconfig6"):
         return False
-    if run("plasma-apply-desktoptheme", "Lucix") != 0:
-        return False
+    #запасной путь: записываем тему в plasmarc, применится при следующем входе
+    run("kwriteconfig6", "--file", "plasmarc", "--group", "Theme", "--key", "name", "Lucix")
 
 
 def notifications():
@@ -1101,30 +1129,65 @@ def notifications():
         return False
     run("kwriteconfig6", "--file", "plasmanotifyrc", "--group", "DoNotDisturb", "--key", "Until", "2099-12-31T23:59:59")
     run("kwriteconfig6", "--file", "plasmanotifyrc", "--group", "Notifications", "--key", "CriticalInDndMode", "true")
+    run("kwriteconfig6", "--file", "plasmanotifyrc", "--group", "Notifications", "--key", "CriticalPopupsInDoNotDisturbMode", "true")
+
+
+KONSOLE_KEYS = (("edit_copy", "Ctrl+C; Ctrl+Ins"), ("edit_paste", "Ctrl+V; Shift+Ins"),
+                ("sigint-signal", "Ctrl+Shift+C; Ctrl+Pause"))
 
 
 def terminal():
-    """в терминале Konsole Ctrl+C копирует выделенное (без выделения прерывает программу), Ctrl+V вставляет"""
-    if not shutil.which("kwriteconfig6"):
+    """Konsole: Ctrl+C копирует, Ctrl+V вставляет; прервать программу можно на Ctrl+Shift+C или Ctrl+Pause"""
+    if not shutil.which("konsole"):
         return False
-    for key, val in (("edit_copy", "Ctrl+C; Ctrl+Shift+C"), ("edit_paste", "Ctrl+V; Ctrl+Shift+V"),
-                     ("edit-copy", "Ctrl+C; Ctrl+Shift+C"), ("edit-paste", "Ctrl+V; Ctrl+Shift+V")):
-        run("kwriteconfig6", "--file", "konsolerc", "--group", "Shortcuts", "--key", key, val)
+    gui_tag = '<gui name="konsole" version="1">'
+    for gpath in glob.glob("/usr/share/kxmlgui*/konsole/sessionui.rc"):
+        try:
+            with open(gpath, encoding="utf-8") as f:
+                m = re.search(r"<gui\b[^>]*>", f.read())
+        except OSError:
+            continue
+        if m:
+            gui_tag = m.group(0)
+            break
+    d = os.path.join(HOME, ".local", "share", "kxmlgui5", "konsole")
+    path = os.path.join(d, "sessionui.rc")
+    props = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for m in re.finditer(r'<Action\s+name="([^"]+)"\s+shortcut="([^"]*)"', f.read()):
+                props[m.group(1)] = m.group(2)
+    except OSError:
+        pass
+    props.update(KONSOLE_KEYS)
+    os.makedirs(d, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('<!DOCTYPE gui SYSTEM "kpartgui.dtd">\n%s\n <ActionProperties scheme="Default">\n' % gui_tag)
+        for name, keys in sorted(props.items()):
+            f.write('  <Action name="%s" shortcut="%s"/>\n' % (name, keys))
+        f.write(" </ActionProperties>\n</gui>\n")
+    log("konsole: записан %s" % path)
+    if shutil.which("kwriteconfig6"):  # то же самое для настроек самой программы
+        for name, keys in KONSOLE_KEYS:
+            run("kwriteconfig6", "--file", "konsolerc", "--group", "Shortcuts", "--key", name, keys)
 
 
 def power():
-    """монитор сам не гаснет и компьютер сам не засыпает (на питании от сети)"""
+    """монитор не гаснет, экран сам не блокируется, компьютер не засыпает"""
     if not shutil.which("kwriteconfig6"):
         return False
     for prof in ("AC", "Battery", "LowBattery"):
         for key in ("DimDisplayWhenIdle", "TurnOffDisplayWhenIdle"):
             run("kwriteconfig6", "--file", "powerdevilrc", "--group", prof, "--group", "Display", "--key", key, "false")
-    run("kwriteconfig6", "--file", "powerdevilrc", "--group", "AC", "--group", "SuspendAndShutdown",
-        "--key", "AutoSuspendAction", "0")
+        run("kwriteconfig6", "--file", "powerdevilrc", "--group", prof, "--group", "SuspendAndShutdown",
+            "--key", "AutoSuspendAction", "0")
+    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Daemon", "--key", "Autolock", "false")
+    run("kwriteconfig6", "--file", "kscreenlockerrc", "--group", "Daemon", "--key", "LockOnResume", "false")
     if shutil.which("xset"):  # сразу, не дожидаясь перезахода
         run("xset", "s", "off")
         run("xset", "s", "noblank")
         run("xset", "-dpms")
+        run("xset", "dpms", "0", "0", "0")
     run("systemctl", "--user", "restart", "plasma-powerdevil.service")
 
 
@@ -1133,28 +1196,29 @@ STEPS = (
     ("focus", 1, focus),
     ("wallpaper", 1, wallpaper),
     ("colors", 1, colors),
-    ("kickoff", 2, kickoff),
+    ("kickoff", 3, kickoff),
     ("screenshot", 2, screenshot),
     ("videos", 2, videos),
     ("keyboard", 1, keyboard),
     ("apps", 3, apps),
     ("panel", 4, panel),
-    ("kbdisplay", 2, kbdisplay),
+    ("kbdisplay", 3, kbdisplay),
+    ("clock", 1, clock),
     ("lockwall", 1, lockwall),
     ("kwin", 1, kwin),
     ("sounds", 1, sounds),
     ("cursor", 2, cursor),
-    ("trash", 2, trash),
+    ("trash", 3, trash),
     ("privacy", 2, privacy),
     ("memory", 1, memory),
     ("cleanup", 1, cleanup),
-    ("terminal", 1, terminal),
-    ("power", 1, power),
-    ("iconcache", 1, iconcache),
+    ("terminal", 2, terminal),
+    ("power", 2, power),
+    ("iconcache", 2, iconcache),
     ("hideapps", 1, hideapps),
-    ("animations", 1, animations),
-    ("plasmatheme", 1, plasmatheme),
-    ("notifications", 1, notifications),
+    ("animations", 2, animations),
+    ("plasmatheme", 2, plasmatheme),
+    ("notifications", 2, notifications),
 )
 
 
@@ -1312,8 +1376,15 @@ def main():
         print("нужен zenity")
         return 1
     if not shutil.which("keyd"):
-        zen("--error", "--text=Не установлен keyd. Он ставится вместе с обновлением Lucix.")
-        return 1
+        r = zen("--question", "--ok-label=Установить", "--cancel-label=Отмена",
+                "--text=Не установлен keyd (программа, которая переназначает клавиши).\n\nУстановить сейчас? Нужен интернет.")
+        if r.returncode != 0:
+            return 0
+        p = subprocess.run(["pkexec", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "keyd"],
+                           capture_output=True, text=True)
+        if p.returncode != 0 or not shutil.which("keyd"):
+            zen("--error", "--text=Не получилось установить keyd:\n" + (p.stderr or p.stdout).strip()[-400:])
+            return 1
     r = zen("--list", "--radiolist", "--height=400", "--text=Сейчас переназначено:\n" + current(),
             "--column=", "--column=Действие", "--column=id", "--hide-column=3", "--print-column=3",
             "TRUE", "Правый Alt работает как Esc", "rightalt-esc",
@@ -1377,7 +1448,7 @@ Terminal=false
 KEYSDESKTOP
     #обязательные пакеты: keyd (клавиши), vlc (видео), python3-pil (курсоры Windows), flatpak (магазин), база Plasma,
     #значок Wi-Fi и громкость, окна выбора файлов («Обзор») в Flatpak и GTK-приложениях
-    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, flameshot, xdg-desktop-portal-kde, xdg-desktop-portal-gtk/' "$tmp/DEBIAN/control"
+    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, flameshot, xdg-desktop-portal-kde, xdg-desktop-portal-gtk, plasma-systemmonitor, fonts-noto-color-emoji/' "$tmp/DEBIAN/control"
     #желательные: если их нет в репозитории, обновление всё равно пройдёт
     sed -i 's/^Recommends: .*/&, ffmpegthumbnailer, gstreamer1.0-libav, alsa-utils, okular/' "$tmp/DEBIAN/control"
     grep -q '^Depends: .*keyd.*portal-gtk' "$tmp/DEBIAN/control" || { echo "не удалось дописать Depends"; exit 1; }
@@ -1697,17 +1768,22 @@ PYCURSOR
     for sub in "widgets" "translucent/widgets"; do mkdir -p "$tmp/usr/share/plasma/desktoptheme/Lucix/$sub"; done
     cat > "$tmp/usr/share/plasma/desktoptheme/Lucix/metadata.json" <<'THEMEJSON'
 {
+    "KPackageStructure": "Plasma/Theme",
     "KPlugin": {
         "Authors": [{"Name": "Lucix"}],
+        "Category": "Plasma Theme",
         "Description": "Lucix: transparent panel",
         "Id": "Lucix",
         "License": "MIT",
         "Name": "Lucix",
-        "Version": "1.0",
+        "ServiceTypes": ["Plasma/Theme"],
+        "Version": "1.1",
         "Website": "https://github.com/lucovisa/lucix"
     }
 }
 THEMEJSON
+    #без размытия под прозрачной панелью (иначе под ней виден мутный прямоугольник)
+    printf '[BlurBehindEffect]\nenabled=false\n' > "$tmp/usr/share/plasma/desktoptheme/Lucix/plasmarc"
     cat > "$tmp/usr/share/plasma/desktoptheme/Lucix/widgets/panel-background.svg" <<'THEMESVG'
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
   <g fill="#000000" fill-opacity="0">
@@ -1841,8 +1917,51 @@ Architecture: all
 Maintainer: Lucix <lucovisa@users.noreply.github.com>
 Depends: lucix-base
 Description: Lucix system defaults
- Sets us+ru keyboard layouts with Alt+Shift switching and turns off a few unneeded background services.
+ Sets us+ru keyboard layouts with Alt+Shift switching, turns off a few unneeded background services, disables screen blanking and sleep, and tunes the network.
 SYCONTROL
+#экран не гаснет и система не засыпает, сеть без экономии энергии
+mkdir -p "$sy/etc/X11/xorg.conf.d" "$sy/etc/systemd/sleep.conf.d" "$sy/etc/systemd/logind.conf.d" \
+  "$sy/etc/NetworkManager/conf.d" "$sy/etc/sysctl.d" "$sy/etc/modules-load.d" "$sy/etc/udev/rules.d"
+cat > "$sy/etc/X11/xorg.conf.d/10-lucix-no-blank.conf" <<'XNOBLANK'
+# Lucix: монитор не уходит в «нет сигнала» по таймеру
+Section "ServerFlags"
+    Option "BlankTime"   "0"
+    Option "StandbyTime" "0"
+    Option "SuspendTime" "0"
+    Option "OffTime"     "0"
+EndSection
+XNOBLANK
+cat > "$sy/etc/systemd/sleep.conf.d/10-lucix-nosleep.conf" <<'SLEEPCONF'
+# Lucix: никакого сна и гибернации
+[Sleep]
+AllowSuspend=no
+AllowHibernation=no
+AllowSuspendThenHibernate=no
+AllowHybridSleep=no
+SLEEPCONF
+cat > "$sy/etc/systemd/logind.conf.d/10-lucix-noidle.conf" <<'LOGINDCONF'
+# Lucix: простой не приводит ни к каким действиям
+[Login]
+IdleAction=ignore
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+LOGINDCONF
+cat > "$sy/etc/NetworkManager/conf.d/20-lucix-wifi.conf" <<'NMCONF'
+# Lucix: Wi-Fi без экономии энергии (меньше задержек и обрывов)
+[connection]
+wifi.powersave = 2
+NMCONF
+cat > "$sy/etc/sysctl.d/60-lucix-net.conf" <<'SYSCTLCONF'
+# Lucix: современное управление перегрузкой сети (BBR) и быстрое открытие соединений
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
+SYSCTLCONF
+echo tcp_bbr > "$sy/etc/modules-load.d/lucix-bbr.conf"
+cat > "$sy/etc/udev/rules.d/60-lucix-usb-power.rules" <<'UDEVCONF'
+# Lucix: USB-устройства (в том числе Wi-Fi адаптеры) не засыпают и не отваливаются
+ACTION=="add", SUBSYSTEM=="usb", TEST=="power/control", ATTR{power/control}="on"
+UDEVCONF
 cat > "$sy/DEBIAN/postinst" <<'SYPOST'
 #!/bin/sh
 set -e
@@ -1863,6 +1982,13 @@ if [ "$1" = configure ] && [ ! -e /var/lib/lucix/services-set ]; then
   done
   mkdir -p /var/lib/lucix
   touch /var/lib/lucix/services-set
+fi
+if [ "$1" = configure ]; then
+  modprobe tcp_bbr >/dev/null 2>&1 || true
+  sysctl -q -p /etc/sysctl.d/60-lucix-net.conf >/dev/null 2>&1 || true
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  udevadm trigger --subsystem-match=usb --action=add >/dev/null 2>&1 || true
+  systemctl reload NetworkManager >/dev/null 2>&1 || true
 fi
 exit 0
 SYPOST
