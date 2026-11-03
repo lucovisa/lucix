@@ -690,9 +690,13 @@ class Updater(Gtk.Window):
         self.mem_store = Gtk.TreeStore(str, str, str, int, str, str, str, str, bool)
         view = Gtk.TreeView(model=self.mem_store)
         self.mem_view = view
-        cols = t("mem_cols")[1 if RU else 0]
+        # колонки берём из перевода; если перевод пришёл короче — подставляем английский вариант
+        cols = t("mem_cols")
+        cols = cols[1] if RU else cols[0]
+        if len(cols) < 6:
+            cols = ("Disk / volume", "Type", "Size", "Used", "Free", "Mounted at")
         for i, title in enumerate(cols):
-            if title == cols[3]:
+            if i == 3:
                 col = Gtk.TreeViewColumn(title, Gtk.CellRendererProgress(), value=3, text=4)
             else:
                 idx = {0: 0, 1: 1, 2: 2, 4: 5, 5: 6}[i]
@@ -731,12 +735,20 @@ class Updater(Gtk.Window):
             tree = H.lsblk_tree()
         except Exception:
             return
+        # lsblk на кастомном ядре иногда отдаёт не список — в этом случае просто выходим
+        if not isinstance(tree, list):
+            return
 
         def add(parent, node):
+            if not isinstance(node, dict):
+                return
             kind = node.get("type")
             if kind in ("loop", "rom"):
                 return
-            size = H.to_int(node.get("size"))
+            try:
+                size = H.to_int(node.get("size"))
+            except Exception:
+                size = 0
             mounts = [m for m in (node.get("mountpoints") or []) if m]
             mnt = mounts[0] if mounts else ""
             used_pct, used_txt, free_txt = 0, "", ""
@@ -756,8 +768,10 @@ class Updater(Gtk.Window):
                 info = node.get("fstype") or kind or ""
             row = self.mem_store.append(parent, [name.strip(), info, human_size(size), used_pct, used_txt, free_txt,
                                                   mnt, node.get("path") or "", bool(mnt)])
-            for child in node.get("children") or []:
-                add(row, child)
+            children = node.get("children") or []
+            if isinstance(children, list):
+                for child in children:
+                    add(row, child)
 
         for disk in tree:
             add(None, disk)
