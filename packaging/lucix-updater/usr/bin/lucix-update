@@ -690,13 +690,9 @@ class Updater(Gtk.Window):
         self.mem_store = Gtk.TreeStore(str, str, str, int, str, str, str, str, bool)
         view = Gtk.TreeView(model=self.mem_store)
         self.mem_view = view
-        # колонки берём из перевода; если перевод пришёл короче — подставляем английский вариант
         cols = t("mem_cols")
-        cols = cols[1] if RU else cols[0]
-        if len(cols) < 6:
-            cols = ("Disk / volume", "Type", "Size", "Used", "Free", "Mounted at")
         for i, title in enumerate(cols):
-            if i == 3:
+            if title == cols[3]:
                 col = Gtk.TreeViewColumn(title, Gtk.CellRendererProgress(), value=3, text=4)
             else:
                 idx = {0: 0, 1: 1, 2: 2, 4: 5, 5: 6}[i]
@@ -735,20 +731,12 @@ class Updater(Gtk.Window):
             tree = H.lsblk_tree()
         except Exception:
             return
-        # lsblk на кастомном ядре иногда отдаёт не список — в этом случае просто выходим
-        if not isinstance(tree, list):
-            return
 
         def add(parent, node):
-            if not isinstance(node, dict):
-                return
             kind = node.get("type")
             if kind in ("loop", "rom"):
                 return
-            try:
-                size = H.to_int(node.get("size"))
-            except Exception:
-                size = 0
+            size = H.to_int(node.get("size"))
             mounts = [m for m in (node.get("mountpoints") or []) if m]
             mnt = mounts[0] if mounts else ""
             used_pct, used_txt, free_txt = 0, "", ""
@@ -768,10 +756,8 @@ class Updater(Gtk.Window):
                 info = node.get("fstype") or kind or ""
             row = self.mem_store.append(parent, [name.strip(), info, human_size(size), used_pct, used_txt, free_txt,
                                                   mnt, node.get("path") or "", bool(mnt)])
-            children = node.get("children") or []
-            if isinstance(children, list):
-                for child in children:
-                    add(row, child)
+            for child in node.get("children") or []:
+                add(row, child)
 
         for disk in tree:
             add(None, disk)
@@ -809,7 +795,7 @@ class Updater(Gtk.Window):
         dialog.set_default_size(720, 520)
         store = Gtk.TreeStore(str, str, str, str)  # имя, размер, дата, путь
         view = Gtk.TreeView(model=store)
-        for i, name in enumerate(t("mem_browser_cols")[1 if RU else 0]):
+        for i, name in enumerate(t("mem_browser_cols")):
             col = Gtk.TreeViewColumn(name, Gtk.CellRendererText(), text=i)
             col.set_resizable(True)
             view.append_column(col)
@@ -1078,7 +1064,7 @@ class Updater(Gtk.Window):
         ctitle.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("vis_cursor")))
         box.pack_start(ctitle, False, False, 8)
         crow = Gtk.Box(spacing=6)
-        for size in (24, 28, 32, 36, 40, 48):
+        for size in (16, 20, 24, 28, 32, 36, 40, 48):
             btn = Gtk.Button(label=str(size))
             btn.connect("clicked", self.set_cursor_size, size)
             crow.pack_start(btn, False, False, 0)
@@ -1171,15 +1157,21 @@ class Updater(Gtk.Window):
             vis_restore(db, path)
         places_clear()
         vis_save(db)
-        self.set_cursor_size(None, 28)
+        self.set_cursor_size(None, 24)
         self.append_log(t("vis_reset_done"))
 
     def set_cursor_size(self, _btn, size):
-        theme = subprocess.run(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"],
-                               capture_output=True, text=True).stdout.strip() or "Lucix-Cursor"
-        subprocess.run(["kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", str(size)])
-        subprocess.run(["plasma-apply-cursortheme", "--size", str(size), theme])
-        self.append_log("%s: %d" % (t("vis_cursor"), size))
+        def out(cmd):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                return -1, str(e)
+            return r.returncode, (r.stdout + r.stderr).strip()
+        rc, theme = out(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"])
+        theme = theme if rc == 0 and theme else "Lucix-Cursor"
+        out(["kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", str(size)])
+        rc, text = out(["plasma-apply-cursortheme", "--size", str(size), theme])
+        self.append_log("%s: %d (%s) -> %s %s" % (t("vis_cursor"), size, theme, "OK" if rc == 0 else "ERROR", text[-300:]))
 
     #вкладка система
     def build_system_tab(self):
@@ -1366,8 +1358,9 @@ class Updater(Gtk.Window):
             self.refresh_features()
         if args[0] == "optimize-disks":
             self.refresh_memory()
-        if args[0] == "disk-format":
+        if args[0] in ("disk-format", "disk-rename", "disk-detach"):
             self.refresh_disks()
+            self.refresh_memory()
 
 
 if __name__ == "__main__":

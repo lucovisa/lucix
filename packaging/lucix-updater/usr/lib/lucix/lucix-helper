@@ -532,10 +532,12 @@ def grow_root_fs(root):
 
 def attach_partition(node, d, pw, keep=False):
     base = os.path.basename(d)
-    name = re.sub(r"[^\w.-]", "_", node.get("label") or "").strip("._-") or base
+    name = re.sub(r"[^\w.-]", "_", node.get("label") or "").strip("._-") or "freememory"
     mnt = os.path.join(DISKS_DIR, name)
-    if os.path.ismount(mnt) or (os.path.isdir(mnt) and os.listdir(mnt)):
-        mnt = os.path.join(DISKS_DIR, name + "-" + base)
+    num = 2
+    while os.path.ismount(mnt) or (os.path.isdir(mnt) and os.listdir(mnt)):
+        mnt = os.path.join(DISKS_DIR, "%s-%d" % (name, num))
+        num += 1
     say("=== " + d + " -> " + mnt)
     for m in node_mounts(node):
         if run(["umount", m]) != 0:
@@ -668,8 +670,11 @@ def mount_source(mnt):
 def disk_rename(mnt, newname):
     mnt = os.path.normpath(mnt)
     newname = newname.strip()
-    if not valid_mount(mnt) or not NAME_RE.match(newname) or newname in (".", ".."):
-        say("bad name or folder")
+    if not valid_mount(mnt):
+        say("this disk is not attached at %s any more (press Refresh)" % mnt)
+        return 2
+    if not NAME_RE.match(newname) or newname in (".", ".."):
+        say("bad name: use letters, digits, space, dot, dash, up to 40 characters")
         return 2
     new = os.path.join(DISKS_DIR, newname)
     if os.path.exists(new):

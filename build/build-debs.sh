@@ -237,7 +237,7 @@ import sys
 import tempfile
 
 TITLE = "Курсор мыши"
-SIZES = (24, 28, 32, 36, 40, 48, 64)
+SIZES = (16, 20, 24, 28, 32, 36, 40, 48, 64)
 
 #роль в Windows -> (имя курсора в Linux, дополнительные имена)
 ROLES = {
@@ -1006,7 +1006,7 @@ def sounds():
         run("xset", "b", "off")
 
 
-CURSOR_SIZE = "28"
+CURSOR_SIZE = "24"
 
 
 def write_text(path, text):
@@ -1021,13 +1021,8 @@ def cursor():
     if not theme and shutil.which("kreadconfig6"):
         theme = subprocess.run(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"],
                                capture_output=True, text=True).stdout.strip()
-    if not theme or not shutil.which("plasma-apply-cursortheme"):
+    if not theme:
         return False
-    if shutil.which("kwriteconfig6"):
-        run("kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", CURSOR_SIZE)
-    if run("plasma-apply-cursortheme", "--size", CURSOR_SIZE, theme) != 0:
-        if run("plasma-apply-cursortheme", theme) != 0:
-            return False
     #тема в домашней папке: её видят и приложения Flatpak
     src = os.path.join("/usr/share/icons", theme)
     if os.path.isdir(src):
@@ -1048,16 +1043,37 @@ def cursor():
             os.makedirs(os.path.dirname(ini), exist_ok=True)
             run("kwriteconfig6", "--file", ini, "--group", "Settings", "--key", "gtk-cursor-theme-name", theme)
             run("kwriteconfig6", "--file", ini, "--group", "Settings", "--key", "gtk-cursor-theme-size", CURSOR_SIZE)
+    #ресурсы X11: их читают Electron-программы вроде Discord и старые X11-приложения
+    xres = os.path.join(HOME, ".Xresources")
+    try:
+        old = ""
+        if os.path.isfile(xres):
+            with open(xres, encoding="utf-8") as f:
+                old = "".join(l for l in f if not l.startswith("Xcursor."))
+        write_text(xres, old + "Xcursor.theme: %s\nXcursor.size: %s\n" % (theme, CURSOR_SIZE))
+        if shutil.which("xrdb"):
+            run("xrdb", "-merge", xres)
+    except OSError as e:
+        log(".Xresources: %r" % (e,))
     try:
         write_text(os.path.join(HOME, ".config", "plasma-workspace", "env", "lucix-cursor.sh"),
                    "export XCURSOR_THEME=%s\nexport XCURSOR_SIZE=%s\n" % (theme, CURSOR_SIZE))
     except OSError as e:
         log("env: %r" % (e,))
     if shutil.which("flatpak"):
-        run("flatpak", "override", "--user", "--env=XCURSOR_THEME=" + theme, "--env=XCURSOR_SIZE=" + CURSOR_SIZE)
+        run("flatpak", "override", "--user", "--filesystem=xdg-data/icons:ro", "--env=XCURSOR_THEME=" + theme,
+            "--env=XCURSOR_SIZE=" + CURSOR_SIZE)
     if shutil.which("gsettings"):
         run("gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme)
         run("gsettings", "set", "org.gnome.desktop.interface", "cursor-size", CURSOR_SIZE)
+    #применяем в Plasma в самом конце: если не получится, всё остальное уже сделано
+    if shutil.which("kwriteconfig6"):
+        run("kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme", theme)
+        run("kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", CURSOR_SIZE)
+    if shutil.which("plasma-apply-cursortheme"):
+        if run("plasma-apply-cursortheme", "--size", CURSOR_SIZE, theme) != 0:
+            if run("plasma-apply-cursortheme", theme) != 0:
+                return False
 
 
 def trash():
@@ -1255,7 +1271,7 @@ STEPS = (
     ("lockwall", 1, lockwall),
     ("kwin", 1, kwin),
     ("sounds", 1, sounds),
-    ("cursor", 3, cursor),
+    ("cursor", 4, cursor),
     ("trash", 3, trash),
     ("privacy", 2, privacy),
     ("memory", 1, memory),
@@ -1917,10 +1933,12 @@ setkv() {
   fi
 }
 
-#ID=ubuntu оставляем: от него зависят Steam, драйверы и сторонние установщики
+#как у Linux Mint: ID=lucix, а ID_LIKE="ubuntu debian" говорит программам, что система совместима (Steam, драйверы, установщики)
 osr="$ROOT/usr/lib/os-release"
 if [ -f "$osr" ] && [ ! -L "$osr" ]; then
   setkv "$osr" NAME '"Lucix"'
+  setkv "$osr" ID lucix
+  setkv "$osr" ID_LIKE '"ubuntu debian"'
   setkv "$osr" PRETTY_NAME "\"Lucix $VER\""
   setkv "$osr" VERSION "\"$VER\""
   setkv "$osr" HOME_URL "\"$REPO\""

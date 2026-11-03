@@ -19,6 +19,8 @@ configure)
       fi
     }
     setkv NAME '"Lucix"'
+    setkv ID lucix
+    setkv ID_LIKE '"ubuntu debian"'
     setkv PRETTY_NAME "\"Lucix $VER\""
     setkv LOGO lucix
   fi
@@ -52,9 +54,11 @@ configure)
   if [ -d /usr/share/icons/Lucix-Cursor ]; then
     mkdir -p /usr/share/icons/default /etc/sddm.conf.d /etc/gtk-3.0 /etc/gtk-4.0
     printf '[Icon Theme]\nName=Default\nInherits=Lucix-Cursor\n' > /usr/share/icons/default/index.theme
-    printf '[Theme]\nCursorTheme=Lucix-Cursor\nCursorSize=28\n' > /etc/sddm.conf.d/10-lucix-cursor.conf
+    mkdir -p /etc/xdg
+    printf '[Mouse]\ncursorTheme=Lucix-Cursor\ncursorSize=24\n' > /etc/xdg/kcminputrc
+    printf '[Theme]\nCursorTheme=Lucix-Cursor\nCursorSize=24\n' > /etc/sddm.conf.d/10-lucix-cursor.conf
     for g in gtk-3.0 gtk-4.0; do
-      printf '[Settings]\ngtk-cursor-theme-name=Lucix-Cursor\ngtk-cursor-theme-size=28\n' > /etc/$g/settings.ini
+      printf '[Settings]\ngtk-cursor-theme-name=Lucix-Cursor\ngtk-cursor-theme-size=24\n' > /etc/$g/settings.ini
     done
   fi
 
