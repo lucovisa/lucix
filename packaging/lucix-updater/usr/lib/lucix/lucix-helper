@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.request
 
@@ -240,6 +241,376 @@ def apps_install(arg):
     return 0 if not failed else 1
 
 
+#функции Lucix: включение, отключение, удаление
+FEATURES = "/usr/share/lucix/features.json"
+GRUB_MARK = STATE_DIR + "/grub-theme"
+GRUB_DROPIN = "/etc/default/grub.d/99-lucix-theme.cfg"
+GRUB_THEME_DIR = "/boot/grub/themes/minegrub-world-selection"
+GRUB_THEME_REPO = "Lxtharia/minegrub-world-sel-theme"
+GRUB_FULL = """# Lucix: тема GRUB и показ Windows в меню (читается последней, поэтому другие настройки её не перебьют)
+GRUB_TERMINAL_OUTPUT=gfxterm
+GRUB_GFXMODE=auto
+GRUB_THEME=/boot/grub/themes/minegrub-world-selection/theme.txt
+GRUB_DISABLE_OS_PROBER=false
+"""
+GRUB_PLAIN = """# Lucix: тема GRUB отключена, Windows в меню остаётся
+GRUB_DISABLE_OS_PROBER=false
+"""
+
+
+def load_features():
+    with open(FEATURES, encoding="utf-8") as f:
+        return {a["id"]: a for a in json.load(f)["features"]}
+
+
+def feature_apt(action, fid):
+    feat = load_features().get(fid)
+    if not feat or feat.get("kind") != "apt" or action not in ("install", "remove"):
+        say("unknown feature")
+        return 2
+    if action == "install":
+        if run(["apt-get", "update"]) != 0:
+            return 1
+        return 0 if apt_install(feat["packages"]) else 1
+    return 0 if run(["apt-get"] + APT_OPTS + ["remove"] + feat["packages"]) == 0 else 1
+
+
+def write_text(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(path, 0o644)
+
+
+def grub_set_default_file(enabled):
+    """строки темы в /etc/default/grub: включаем или прячем"""
+    path = "/etc/default/grub"
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    out = []
+    for line in lines:
+        if enabled and re.match(r"^#?GRUB_THEME=", line):
+            line = "GRUB_THEME=" + GRUB_THEME_DIR + "/theme.txt"
+        elif not enabled and line.startswith("GRUB_THEME="):
+            line = "#" + line
+        out.append(line)
+    if enabled and not any(l.startswith("GRUB_THEME=") for l in out):
+        out.append("GRUB_THEME=" + GRUB_THEME_DIR + "/theme.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
+def grub_download():
+    """скачивает тему с GitHub автора и ставит в /boot/grub/themes"""
+    url = "https://api.github.com/repos/%s/tarball" % GRUB_THEME_REPO
+    work = tempfile.mkdtemp(prefix="lucix-grub-")
+    try:
+        arc = os.path.join(work, "theme.tar.gz")
+        say("download " + GRUB_THEME_REPO)
+        download(url, arc)
+        out = os.path.join(work, "theme")
+        count = 0
+        with tarfile.open(arc) as tar:
+            for m in tar.getmembers():
+                parts = m.name.split("/")
+                if len(parts) < 2 or parts[1] != "minegrub-world-selection" or ".." in parts or m.name.startswith("/"):
+                    continue
+                if not (m.isfile() or m.isdir()):
+                    continue
+                dest = os.path.join(out, *parts[2:]) if len(parts) > 2 else out
+                if m.isdir():
+                    os.makedirs(dest, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                src = tar.extractfile(m)
+                with open(dest, "wb") as f:
+                    shutil.copyfileobj(src, f)
+                count += 1
+        if not os.path.isfile(os.path.join(out, "theme.txt")):
+            say("theme.txt not found in the download")
+            return False
+        shutil.rmtree(GRUB_THEME_DIR, ignore_errors=True)
+        os.makedirs(os.path.dirname(GRUB_THEME_DIR), exist_ok=True)
+        shutil.copytree(out, GRUB_THEME_DIR)
+        say("theme files: %d" % count)
+        return True
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def grub_theme(action):
+    if action not in ("on", "off", "remove", "download"):
+        say("unknown action")
+        return 2
+    os.makedirs(STATE_DIR, exist_ok=True)
+    if action == "download":
+        if not grub_download():
+            return 1
+        action = "on"
+    if action == "on":
+        if not os.path.isfile(os.path.join(GRUB_THEME_DIR, "theme.txt")):
+            say("theme is not installed, downloading")
+            if not grub_download():
+                return 1
+        if os.path.exists(GRUB_MARK):
+            os.remove(GRUB_MARK)
+        write_text(GRUB_DROPIN, GRUB_FULL)
+        grub_set_default_file(True)
+    else:
+        write_text(GRUB_MARK, "removed\n" if action == "remove" else "off\n")
+        write_text(GRUB_DROPIN, GRUB_PLAIN)
+        grub_set_default_file(False)
+        if action == "remove":
+            shutil.rmtree(GRUB_THEME_DIR, ignore_errors=True)
+    if shutil.which("update-grub"):
+        return 0 if run(["update-grub"]) == 0 else 1
+    return 0
+
+
+#диски: форматирование выбранных томов и подключение к Lucix
+DEV_RE = re.compile(r"^/dev/(sd[a-z]{1,2}[0-9]{1,3}|vd[a-z]{1,2}[0-9]{1,3}|nvme[0-9]{1,2}n[0-9]{1,3}p[0-9]{1,3}|mmcblk[0-9]{1,2}p[0-9]{1,3})$")
+SAFE_PARTTYPES = {"c12a7328-f81f-11d2-ba4b-00a0c93ec93b",  # EFI
+                  "21686148-6449-6e6f-744e-656564454649",  # BIOS boot
+                  "e3c9e316-0b5c-4db8-817d-f92df00215ae",  # Windows MSR
+                  "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"}  # swap
+SAFE_FSTYPES = {"swap", "LVM2_member", "linux_raid_member", "zfs_member"}
+SAFE_MOUNTS = ("/", "/boot", "/home", "/usr", "/var", "/opt", "/etc", "/srv", "[SWAP]")
+DISKS_DIR = "/mnt/lucix-disks"
+
+
+def lsblk_tree():
+    r = subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,START,FSTYPE,LABEL,UUID,MOUNTPOINTS,TYPE,PARTTYPE,PTTYPE,MODEL,LOG-SEC"],
+                       capture_output=True, text=True)
+    return json.loads(r.stdout)["blockdevices"]
+
+
+def node_mounts(node):
+    out = [m for m in (node.get("mountpoints") or []) if m]
+    for ch in node.get("children") or []:
+        out += node_mounts(ch)
+    return out
+
+
+def part_protected(node):
+    """системные тома трогать нельзя: корень, /boot, EFI, swap, RAID и LVM"""
+    if (node.get("parttype") or "").lower() in SAFE_PARTTYPES or node.get("fstype") in SAFE_FSTYPES:
+        return True
+    for m in node_mounts(node):
+        if m in SAFE_MOUNTS or m.startswith("/boot") or m.startswith("/usr") or m.startswith("/var"):
+            return True
+    return False
+
+
+def list_parts(tree):
+    found = {}
+
+    def walk(nodes):
+        for n in nodes:
+            if n.get("type") == "part" and n.get("path"):
+                found[n["path"]] = n
+            walk(n.get("children") or [])
+    walk(tree)
+    return found
+
+
+def fstab_drop(dev, uuid):
+    path = "/etc/fstab"
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    if not os.path.exists(path + ".lucix-bak"):
+        shutil.copy2(path, path + ".lucix-bak")
+    keep = []
+    for line in lines:
+        first = line.split()[0] if line.split() and not line.lstrip().startswith("#") else ""
+        if first == dev or (uuid and first == "UUID=" + uuid):
+            continue
+        keep.append(line)
+    return keep
+
+
+def to_int(v):
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def part_number(path):
+    m = re.search(r"(\d+)$", path)
+    return int(m.group(1)) if m else 0
+
+
+def find_root(tree):
+    """где лежит Lucix: диск, раздел, файловая система и (если есть) шифрование. None если расширять нельзя"""
+    for disk in tree:
+        if disk.get("type") != "disk":
+            continue
+        for part in disk.get("children") or []:
+            if part.get("type") != "part" or "/" not in node_mounts(part):
+                continue
+            node, crypt, ok = part, None, True
+            while "/" not in [m for m in (node.get("mountpoints") or []) if m]:
+                nxt = [c for c in (node.get("children") or []) if "/" in node_mounts(c)]
+                if not nxt:
+                    ok = False
+                    break
+                node = nxt[0]
+                if node.get("type") == "crypt":
+                    crypt = node.get("name")
+                elif node.get("type") not in ("part",):
+                    ok = False  # LVM и прочее: расширять не берёмся
+            fstype = node.get("fstype") or ""
+            if fstype not in ("ext4", "ext3", "ext2", "btrfs", "xfs"):
+                ok = False
+            if (disk.get("pttype") or "") != "gpt":
+                ok = False
+            return {"disk": disk, "part": part, "fs": node, "crypt": crypt, "ok": ok}
+    return None
+
+
+def make_plan(tree, selected):
+    """какие выбранные тома присоединятся к самому Lucix (лежат вплотную справа), а какие станут отдельным диском"""
+    join = []
+    root = find_root(tree)
+    if root and root["ok"]:
+        sec = to_int(root["disk"].get("log-sec")) or 512
+        parts = sorted([p for p in (root["disk"].get("children") or []) if p.get("type") == "part"],
+                       key=lambda p: to_int(p.get("start")))
+        end = to_int(root["part"].get("start")) + to_int(root["part"].get("size")) // sec
+        for p in parts:
+            if to_int(p.get("start")) < end:
+                continue
+            if p["path"] not in selected or to_int(p.get("start")) - end > 65536:
+                break
+            join.append(p["path"])
+            end = to_int(p.get("start")) + to_int(p.get("size")) // sec
+    attach = [d for d in selected if d not in join]
+    return {"join": join, "attach": attach, "root": root}
+
+
+def table_join(disk, root_n, del_ns):
+    """удаляем выбранные разделы и растягиваем раздел Lucix на освободившееся место"""
+    for n in del_ns:
+        if run(["sfdisk", "--no-reread", "--delete", disk, str(n)]) != 0:
+            return False
+    say("$ sfdisk --no-reread -N %d %s  (',+')" % (root_n, disk))
+    r = subprocess.run(["sfdisk", "--no-reread", "-N", str(root_n), disk], input=",+\n", text=True, env=ENV)
+    if r.returncode != 0:
+        return False
+    for n in del_ns:
+        subprocess.call(["partx", "-d", "--nr", str(n), disk], env=ENV)
+    return subprocess.call(["partx", "-u", "--nr", str(root_n), disk], env=ENV) == 0
+
+
+def grow_root_fs(root):
+    fs = root["fs"]
+    if root["crypt"] and run(["cryptsetup", "resize", root["crypt"]]) != 0:
+        return False
+    fstype = fs.get("fstype")
+    if fstype in ("ext4", "ext3", "ext2"):
+        return run(["resize2fs", fs.get("path") or "/dev/mapper/" + (fs.get("name") or "")]) == 0
+    if fstype == "btrfs":
+        return run(["btrfs", "filesystem", "resize", "max", "/"]) == 0
+    if fstype == "xfs":
+        return run(["xfs_growfs", "/"]) == 0
+    return False
+
+
+def attach_partition(node, d, pw):
+    label = "lucix-" + os.path.basename(d)
+    mnt = os.path.join(DISKS_DIR, label)
+    say("=== " + d + " -> " + mnt)
+    for m in node_mounts(node):
+        if run(["umount", m]) != 0:
+            say("cannot unmount " + m)
+            return None
+    if run(["wipefs", "-a", d]) != 0 or run(["mkfs.ext4", "-F", "-m", "0", "-L", label, d]) != 0:
+        say("FAILED " + d)
+        return None
+    r = subprocess.run(["blkid", "-s", "UUID", "-o", "value", d], capture_output=True, text=True)
+    uuid = r.stdout.strip()
+    if not uuid:
+        say("no UUID for " + d)
+        return None
+    lines = fstab_drop(d, node.get("uuid"))
+    lines.append("UUID=%s %s ext4 defaults,nofail,noatime 0 2" % (uuid, mnt))
+    with open("/etc/fstab", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.makedirs(mnt, exist_ok=True)
+    run(["systemctl", "daemon-reload"])
+    if run(["mount", mnt]) != 0:
+        say("cannot mount " + mnt)
+        return None
+    os.makedirs(os.path.join(mnt, "SteamLibrary"), exist_ok=True)
+    run(["chown", "-R", "%d:%d" % (pw.pw_uid, pw.pw_gid), mnt])
+    say("OK " + d)
+    return mnt
+
+
+def disk_format(arg):
+    devs = [d for d in arg.split(",") if d]
+    if not devs or len(devs) > 8 or len(set(devs)) != len(devs) or not all(DEV_RE.match(d) for d in devs):
+        say("bad device list")
+        return 2
+    try:
+        pw = pwd.getpwuid(int(os.environ.get("PKEXEC_UID", "")))
+    except Exception:
+        say("cannot find the user")
+        return 2
+    tree = lsblk_tree()
+    parts = list_parts(tree)
+    for d in devs:
+        if d not in parts:
+            say("not a partition: " + d)
+            return 2
+        if part_protected(parts[d]):
+            say("refusing system partition " + d)
+            return 2
+    plan = make_plan(tree, devs)
+    os.makedirs(DISKS_DIR, exist_ok=True)
+    mounts = []
+    if plan["join"]:
+        root = plan["root"]
+        disk = root["disk"]["path"]
+        before = to_int(root["part"].get("size"))
+        say("=== joining to Lucix: " + ", ".join(plan["join"]))
+        for d in plan["join"]:
+            for m in node_mounts(parts[d]):
+                if run(["umount", m]) != 0:
+                    say("cannot unmount " + m)
+                    return 1
+            fstab_keep = fstab_drop(d, parts[d].get("uuid"))
+            with open("/etc/fstab", "w", encoding="utf-8") as f:
+                f.write("\n".join(fstab_keep) + "\n")
+        if not table_join(disk, part_number(root["part"]["path"]), [part_number(d) for d in plan["join"]]):
+            say("FAILED to change the partition table")
+            return 1
+        after = to_int(subprocess.run(["lsblk", "-b", "-n", "-d", "-o", "SIZE", root["part"]["path"]],
+                                      capture_output=True, text=True).stdout.strip() or 0)
+        if after <= before:
+            say("FAILED the system did not see the new size, reboot and try again")
+            return 1
+        if not grow_root_fs(root):
+            say("FAILED to grow the file system")
+            return 1
+        say("OK Lucix is now %.1f GB bigger" % ((after - before) / 1e9))
+    for d in plan["attach"]:
+        mnt = attach_partition(parts[d], d, pw)
+        if not mnt:
+            return 1
+        mounts.append(mnt)
+    if mounts and shutil.which("flatpak"):
+        run(["flatpak", "override", "--system", "--filesystem=" + DISKS_DIR, "com.valvesoftware.Steam"])
+    if shutil.which("update-grub"):
+        run(["update-grub"])
+    for mnt in mounts:
+        say("Steam library folder: %s/SteamLibrary (Steam > Settings > Storage > add drive)" % mnt)
+    say("DONE")
+    return 0
+
+
 #обновление lucix из релиза
 def lucix_update(tag, snap):
     if not TAG_RE.match(tag):
@@ -338,7 +709,7 @@ def main(argv):
         return 2
     snap = "--no-snapshot" not in argv
     cmd = argv[1]
-    if cmd in ("apps-install", "apt-upgrade", "drivers-install") and is_live():
+    if cmd in ("apps-install", "apt-upgrade", "drivers-install", "feature-apt", "grub-theme", "disk-format") and is_live():
         say("live mode: install Lucix first")
         return 2
     try:
@@ -348,6 +719,12 @@ def main(argv):
             return apt_update()
         if cmd == "apps-install" and len(argv) >= 3:
             return apps_install(argv[2])
+        if cmd == "feature-apt" and len(argv) >= 4 and APP_ID_RE.match(argv[3]):
+            return feature_apt(argv[2], argv[3])
+        if cmd == "disk-format" and len(argv) >= 4 and argv[2] == "--yes":
+            return disk_format(argv[3])
+        if cmd == "grub-theme" and len(argv) >= 3:
+            return grub_theme(argv[2])
         if cmd == "apt-upgrade":
             return apt_upgrade(snap)
         if cmd == "drivers-install":

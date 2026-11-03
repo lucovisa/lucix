@@ -41,6 +41,13 @@ configure)
     printf '\n[Daemon]\nTheme=lucix\n' >> "$conf"
   fi
 
+  #меню Пуск и всплывающие окна без прозрачности: берём сплошной фон из стандартной темы Plasma
+  solid=/usr/share/plasma/desktoptheme/default/solid/dialogs/background.svgz
+  if [ -f "$solid" ] && [ -d /usr/share/plasma/desktoptheme/Lucix ]; then
+    mkdir -p /usr/share/plasma/desktoptheme/Lucix/translucent/dialogs
+    cp -f "$solid" /usr/share/plasma/desktoptheme/Lucix/translucent/dialogs/background.svgz || true
+  fi
+
   #кэш иконок
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true

@@ -1,0 +1,61 @@
+{
+  "features": [
+    {
+      "id": "gamemode",
+      "kind": "apt",
+      "packages": [
+        "gamemode"
+      ],
+      "name": [
+        "GameMode",
+        "GameMode"
+      ],
+      "desc": [
+        "Boosts game performance while a game runs (use: gamemoderun %command% in Steam launch options)",
+        "Ускоряет игры, пока игра запущена (в Steam: gamemoderun %command% в параметрах запуска)"
+      ]
+    },
+    {
+      "id": "gamescope",
+      "kind": "apt",
+      "packages": [
+        "gamescope"
+      ],
+      "name": [
+        "Gamescope",
+        "Gamescope"
+      ],
+      "desc": [
+        "Game compositor: fullscreen, resolution scaling, FSR (use: gamescope -f -- %command%)",
+        "Игровое окружение: полный экран, масштабирование, FSR (в Steam: gamescope -f -- %command%)"
+      ]
+    },
+    {
+      "id": "mangohud",
+      "kind": "apt",
+      "packages": [
+        "mangohud"
+      ],
+      "name": [
+        "MangoHud",
+        "MangoHud"
+      ],
+      "desc": [
+        "FPS and system monitor overlay in games (use: mangohud %command%)",
+        "Счётчик FPS и нагрузки поверх игры (в Steam: mangohud %command%)"
+      ]
+    },
+    {
+      "id": "grub-theme",
+      "kind": "grub-theme",
+      "name": [
+        "GRUB theme (Minecraft)",
+        "Тема GRUB (Minecraft)"
+      ],
+      "desc": [
+        "Boot menu theme. Can be turned off, removed or downloaded again",
+        "Оформление меню загрузки. Можно отключить, удалить и скачать заново"
+      ]
+    }
+  ]
+}

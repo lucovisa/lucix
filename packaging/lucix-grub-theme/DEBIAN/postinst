@@ -14,8 +14,16 @@ configure)
         echo "$1=$2" >> /etc/default/grub
       fi
     }
-    setkv GRUB_TERMINAL_OUTPUT gfxterm
-    setkv GRUB_THEME /boot/grub/themes/minegrub-world-selection/theme.txt
+    mark=$(cat /var/lib/lucix/grub-theme 2>/dev/null || true)
+    if [ -n "$mark" ]; then
+      #пользователь отключил или удалил тему: уважаем выбор, остаётся только показ Windows
+      printf '# Lucix: тема GRUB отключена, Windows в меню остаётся\nGRUB_DISABLE_OS_PROBER=false\n' > /etc/default/grub.d/99-lucix-theme.cfg
+      sed -i 's|^GRUB_THEME=|#GRUB_THEME=|' /etc/default/grub
+      [ "$mark" = removed ] && rm -rf /boot/grub/themes/minegrub-world-selection
+    else
+      setkv GRUB_TERMINAL_OUTPUT gfxterm
+      setkv GRUB_THEME /boot/grub/themes/minegrub-world-selection/theme.txt
+    fi
     if command -v update-grub >/dev/null 2>&1; then
       update-grub || true
     fi
