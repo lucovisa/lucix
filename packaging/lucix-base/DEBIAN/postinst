@@ -48,6 +48,16 @@ configure)
     cp -f "$solid" /usr/share/plasma/desktoptheme/Lucix/translucent/dialogs/background.svgz || true
   fi
 
+  #курсор Lucix как системный: по умолчанию для всех программ, экрана входа и GTK
+  if [ -d /usr/share/icons/Lucix-Cursor ]; then
+    mkdir -p /usr/share/icons/default /etc/sddm.conf.d /etc/gtk-3.0 /etc/gtk-4.0
+    printf '[Icon Theme]\nName=Default\nInherits=Lucix-Cursor\n' > /usr/share/icons/default/index.theme
+    printf '[Theme]\nCursorTheme=Lucix-Cursor\nCursorSize=28\n' > /etc/sddm.conf.d/10-lucix-cursor.conf
+    for g in gtk-3.0 gtk-4.0; do
+      printf '[Settings]\ngtk-cursor-theme-name=Lucix-Cursor\ngtk-cursor-theme-size=28\n' > /etc/$g/settings.ini
+    done
+  fi
+
   #кэш иконок
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true

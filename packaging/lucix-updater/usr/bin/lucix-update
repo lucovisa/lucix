@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 import json
 import os
+import shutil
 import subprocess
 import threading
+import time
 import urllib.request
 
 import gi
@@ -72,6 +74,46 @@ TEXT = {
     "confirm_detach": ("Detach %s? Files stay on the disk.", "Отключить %s? Файлы на диске останутся."),
     "copy_launch": ("Copy launch option", "Копировать параметр запуска"),
     "copied": ("Copied: %s", "Скопировано: %s"),
+    "vis_info_title": ("What is visual and what is not", "Что здесь визуал, а что нет"),
+    "vis_info_body": (
+        "VISUAL ONLY (the real thing does not change):\n"
+        "- folder name and icon in Dolphin and KDE dialogs\n"
+        "- sidebar entry text and icon in Dolphin\n"
+        "- cursor size\n\n"
+        "Stored with the file, but does not change its content or name: comment, tags, rating.\n\n"
+        "NOT possible as visual (the system shows the real values): file name, file size, dates.\n"
+        "Steam and games always see the real sizes.\n\n"
+        "If you really want to change them (this is a REAL change, every program sees it):\n"
+        "- file name: press F2 in Dolphin\n"
+        "- dates: in a terminal run  touch -d \"2020-01-31 12:00\" file  (modification date)\n"
+        "- size: cannot be faked, it is the real size of the data",
+        "ТОЛЬКО ВИЗУАЛ (настоящее не меняется):\n"
+        "- название и значок папки в Dolphin и окнах KDE\n"
+        "- текст и значок пункта в боковой панели Dolphin\n"
+        "- размер курсора\n\n"
+        "Хранится вместе с файлом, но не меняет ни содержимое, ни имя: комментарий, метки, оценка.\n\n"
+        "НЕЛЬЗЯ как визуал (система показывает настоящее): имя файла, размер файла, даты.\n"
+        "Steam и игры всегда видят настоящие размеры.\n\n"
+        "Если очень нужно изменить (это НАСТОЯЩЕЕ изменение, его увидят все программы):\n"
+        "- имя файла: нажмите F2 в Dolphin\n"
+        "- даты: в терминале  touch -d \"2020-01-31 12:00\" файл  (дата изменения)\n"
+        "- размер: подделать нельзя, это настоящий размер данных"),
+    "vis_path": ("Folder or file", "Папка или файл"),
+    "vis_folder_btn": ("Folder...", "Папка..."),
+    "vis_file_btn": ("File...", "Файл..."),
+    "vis_icon": ("Icon (name or picture file):", "Значок (имя или файл с картинкой):"),
+    "vis_comment": ("Comment:", "Комментарий:"),
+    "vis_tags": ("Tags (comma separated):", "Метки (через запятую):"),
+    "vis_rating": ("Rating (0-5):", "Оценка (0-5):"),
+    "vis_revert": ("Undo for this item", "Вернуть как было"),
+    "vis_places": ("Sidebar entry in Dolphin (close Dolphin first)", "Пункт в боковой панели Dolphin (сначала закройте Dolphin)"),
+    "vis_places_add": ("Add to the sidebar", "Добавить в боковую панель"),
+    "vis_places_label": ("Text shown:", "Текст пункта:"),
+    "vis_places_none": ("Open Dolphin once, then close it, and try again.", "Откройте Dolphin один раз, закройте его и повторите."),
+    "vis_reset_all": ("Reset ALL visual changes", "Сбросить ВЕСЬ визуал"),
+    "vis_reset_ask": ("Undo everything done in this tab (names, icons, comments, sidebar entries, cursor size)?", "Отменить всё, что сделано в этой вкладке (названия, значки, комментарии, пункты панели, размер курсора)?"),
+    "vis_reset_done": ("Everything is back to how it was.", "Всё возвращено как было."),
+    "vis_xattr_fail": ("Comment, tags and rating are not supported on this disk: %s", "Комментарии, метки и оценка не поддерживаются на этом диске: %s"),
     "vis_note": ("Look of the file manager and cursor. Changes are only visual: the real names and sizes do not change.", "Внешний вид проводника и курсора. Изменения только визуальные: настоящие имена и размеры не меняются."),
     "vis_folder": ("Folder name in the file manager", "Название папки в проводнике"),
     "vis_pick": ("Choose folder...", "Выбрать папку..."),
@@ -216,37 +258,144 @@ except Exception:
     H = None
 
 
-def edit_directory_file(folder, name):
-    """показываемое имя папки в Dolphin: ключ Name в файле .directory (пустое имя убирает его)"""
+VISUAL_DB = os.path.join(os.path.expanduser("~"), ".local", "share", "lucix", "visual.json")
+PLACES = os.path.join(os.path.expanduser("~"), ".local", "share", "user-places.xbel")
+
+
+def vis_load():
+    try:
+        with open(VISUAL_DB, encoding="utf-8") as f:
+            db = json.load(f)
+    except (OSError, ValueError):
+        db = {}
+    db.setdefault("folders", {})
+    db.setdefault("xattrs", {})
+    return db
+
+
+def vis_save(db):
+    os.makedirs(os.path.dirname(VISUAL_DB), exist_ok=True)
+    with open(VISUAL_DB, "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=1)
+
+
+def dir_read_keys(folder, keys=("Name", "Icon")):
+    """значения Name и Icon из .directory (None, если не заданы)"""
+    out = {k: None for k in keys}
+    try:
+        with open(os.path.join(folder, ".directory"), encoding="utf-8") as f:
+            sec = None
+            for line in f:
+                st = line.strip()
+                if st.startswith("[") and st.endswith("]"):
+                    sec = st[1:-1]
+                elif sec == "Desktop Entry":
+                    for k in keys:
+                        if st.startswith(k + "="):
+                            out[k] = st[len(k) + 1:]
+    except OSError:
+        pass
+    return out
+
+
+def dir_write_keys(folder, values):
+    """пишет ключи (Name, Icon) в .directory, None удаляет ключ; пустой файл удаляется"""
     path = os.path.join(folder, ".directory")
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.read().splitlines()
     except OSError:
         lines = []
+    new = [k + "=" + v for k, v in values.items() if v]
     out, sec, inserted = [], None, False
     for line in lines:
         st = line.strip()
         if st.startswith("[") and st.endswith("]"):
-            if sec == "Desktop Entry" and name and not inserted:
-                out.append("Name=" + name)
+            if sec == "Desktop Entry" and not inserted:
+                out += new
                 inserted = True
             sec = st[1:-1]
-        elif sec == "Desktop Entry" and (st.startswith("Name=") or st.startswith("Name[")):
+        elif sec == "Desktop Entry" and any(st.startswith(k + "=") or st.startswith(k + "[") for k in values):
             continue
         out.append(line)
-    if sec == "Desktop Entry" and name and not inserted:
-        out.append("Name=" + name)
+    if sec == "Desktop Entry" and not inserted:
+        out += new
         inserted = True
-    if name and not inserted:
-        out = ["[Desktop Entry]", "Name=" + name] + out
-    meaningful = [l for l in out if l.strip() and l.strip() != "[Desktop Entry]"]
-    if not meaningful:
+    if new and not inserted:
+        out = ["[Desktop Entry]"] + new + out
+    if not [l for l in out if l.strip() and l.strip() != "[Desktop Entry]"]:
         if os.path.exists(path):
             os.remove(path)
         return
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out) + "\n")
+
+
+def xattr_get(path, attr):
+    try:
+        return os.getxattr(path, attr).decode("utf-8", "replace")
+    except OSError:
+        return None
+
+
+def xattr_set(path, attr, value):
+    if value is None:
+        try:
+            os.removexattr(path, attr)
+        except OSError:
+            pass
+        return
+    os.setxattr(path, attr, value.encode("utf-8"))
+
+
+def vis_restore(db, path):
+    """возвращает папку или файл как было до изменений"""
+    saved = db["folders"].pop(path, None)
+    if saved is not None and os.path.isdir(path):
+        try:
+            dir_write_keys(path, saved)
+        except OSError:
+            pass
+    for attr, value in (db["xattrs"].pop(path, None) or {}).items():
+        try:
+            xattr_set(path, attr, value)
+        except OSError:
+            pass
+
+
+def places_add(folder, label, icon):
+    """пункт в боковой панели Dolphin с любым текстом и значком (только отображение)"""
+    from urllib.parse import quote
+    from xml.sax.saxutils import escape
+    try:
+        with open(PLACES, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return False
+    if "</xbel>" not in text:
+        return False
+    block = ('<bookmark href="file://%s">\n <title>%s</title>\n <info>\n  <metadata owner="http://freedesktop.org">\n'
+             '   <bookmark:icon name="%s"/>\n  </metadata>\n  <metadata owner="http://www.kde.org">\n'
+             '   <ID>lucix-%d</ID>\n   <isSystemItem>false</isSystemItem>\n  </metadata>\n </info>\n</bookmark>\n'
+             % (quote(folder), escape(label), escape(icon, {'"': "&quot;"}), int(time.time() * 1000)))
+    shutil.copy2(PLACES, PLACES + ".lucix-bak")
+    with open(PLACES, "w", encoding="utf-8") as f:
+        f.write(text.replace("</xbel>", block + "</xbel>"))
+    return True
+
+
+def places_clear():
+    import re as _re
+    try:
+        with open(PLACES, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return
+    new = _re.sub(r'<bookmark href="[^"]*">(?:(?!</bookmark>).)*?<ID>lucix-\d+</ID>(?:(?!</bookmark>).)*?</bookmark>\s*', "",
+                  text, flags=_re.S)
+    if new != text:
+        with open(PLACES, "w", encoding="utf-8") as f:
+            f.write(new)
 
 
 def deb_version(tag):
@@ -636,86 +785,176 @@ class Updater(Gtk.Window):
 
     #вкладка визуал
     def build_visual_tab(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_border_width(8)
         note = Gtk.Label(label=t("vis_note"), xalign=0)
         note.set_line_wrap(True)
         box.pack_start(note, False, False, 0)
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("vis_folder")))
-        box.pack_start(title, False, False, 6)
-        self.vis_folder = None
-        self.vis_folder_label = Gtk.Label(label="-", xalign=0)
-        pick = Gtk.Button(label=t("vis_pick"))
-        pick.connect("clicked", self.pick_visual_folder)
-        row = Gtk.Box(spacing=6)
-        row.pack_start(pick, False, False, 0)
-        row.pack_start(self.vis_folder_label, True, True, 0)
-        box.pack_start(row, False, False, 0)
-        row2 = Gtk.Box(spacing=6)
-        row2.pack_start(Gtk.Label(label=t("vis_name")), False, False, 0)
-        self.vis_entry = Gtk.Entry()
-        row2.pack_start(self.vis_entry, True, True, 0)
-        box.pack_start(row2, False, False, 0)
-        row3 = Gtk.Box(spacing=6)
-        apply_btn = Gtk.Button(label=t("vis_apply"))
-        apply_btn.connect("clicked", self.apply_visual_name, False)
-        reset_btn = Gtk.Button(label=t("vis_reset"))
-        reset_btn.connect("clicked", self.apply_visual_name, True)
-        row3.pack_start(apply_btn, False, False, 0)
-        row3.pack_start(reset_btn, False, False, 0)
-        box.pack_start(row3, False, False, 0)
         hint = Gtk.Label(label=t("vis_hint"), xalign=0)
         hint.set_line_wrap(True)
         box.pack_start(hint, False, False, 0)
+        info = Gtk.Expander(label=t("vis_info_title"))
+        body = Gtk.Label(label=t("vis_info_body"), xalign=0)
+        body.set_line_wrap(True)
+        body.set_selectable(True)
+        info.add(body)
+        box.pack_start(info, False, False, 0)
+
+        self.vis_path = None
+        pick = Gtk.Box(spacing=6)
+        pick.pack_start(Gtk.Label(label=t("vis_path")), False, False, 0)
+        for label, folder in ((t("vis_folder_btn"), True), (t("vis_file_btn"), False)):
+            btn = Gtk.Button(label=label)
+            btn.connect("clicked", self.pick_visual_path, folder)
+            pick.pack_start(btn, False, False, 0)
+        self.vis_path_label = Gtk.Label(label="-", xalign=0)
+        self.vis_path_label.set_ellipsize(Pango.EllipsizeMode.START)
+        pick.pack_start(self.vis_path_label, True, True, 0)
+        box.pack_start(pick, False, False, 4)
+
+        grid = Gtk.Grid(column_spacing=8, row_spacing=4)
+        self.vis_name = Gtk.Entry()
+        self.vis_icon = Gtk.ComboBoxText.new_with_entry()
+        for icon in ("folder-red", "folder-blue", "folder-green", "folder-yellow", "folder-orange", "folder-violet",
+                     "folder-brown", "folder-grey", "folder-black", "folder-games", "folder-download",
+                     "folder-documents", "folder-music", "folder-video", "folder-pictures", "folder-favorites",
+                     "folder-important", "folder-cloud"):
+            self.vis_icon.append_text(icon)
+        self.vis_comment = Gtk.Entry()
+        self.vis_tags = Gtk.Entry()
+        self.vis_rating = Gtk.SpinButton.new_with_range(0, 5, 1)
+        rows = ((t("vis_name"), self.vis_name), (t("vis_icon"), self.vis_icon), (t("vis_comment"), self.vis_comment),
+                (t("vis_tags"), self.vis_tags), (t("vis_rating"), self.vis_rating))
+        for i, (label, widget) in enumerate(rows):
+            grid.attach(Gtk.Label(label=label, xalign=0), 0, i, 1, 1)
+            widget.set_hexpand(True)
+            grid.attach(widget, 1, i, 1, 1)
+        box.pack_start(grid, False, False, 0)
+        bar = Gtk.Box(spacing=6)
+        ok = Gtk.Button(label=t("vis_apply"))
+        ok.connect("clicked", self.apply_visual)
+        undo = Gtk.Button(label=t("vis_revert"))
+        undo.connect("clicked", self.revert_visual)
+        bar.pack_start(ok, False, False, 0)
+        bar.pack_start(undo, False, False, 0)
+        box.pack_start(bar, False, False, 0)
+
+        ptitle = Gtk.Label(xalign=0)
+        ptitle.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("vis_places")))
+        box.pack_start(ptitle, False, False, 8)
+        prow = Gtk.Box(spacing=6)
+        self.places_label = Gtk.Entry()
+        self.places_label.set_placeholder_text(t("vis_places_label"))
+        self.places_icon = Gtk.ComboBoxText.new_with_entry()
+        for icon in ("drive-harddisk", "folder-games", "folder-favorites", "folder-download", "folder-documents"):
+            self.places_icon.append_text(icon)
+        self.places_icon.set_active(0)
+        padd = Gtk.Button(label=t("vis_places_add"))
+        padd.connect("clicked", self.add_place)
+        prow.pack_start(self.places_label, True, True, 0)
+        prow.pack_start(self.places_icon, False, False, 0)
+        prow.pack_start(padd, False, False, 0)
+        box.pack_start(prow, False, False, 0)
+
         ctitle = Gtk.Label(xalign=0)
         ctitle.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("vis_cursor")))
-        box.pack_start(ctitle, False, False, 10)
+        box.pack_start(ctitle, False, False, 8)
         crow = Gtk.Box(spacing=6)
         for size in (24, 28, 32, 36, 40, 48):
             btn = Gtk.Button(label=str(size))
             btn.connect("clicked", self.set_cursor_size, size)
             crow.pack_start(btn, False, False, 0)
         box.pack_start(crow, False, False, 0)
+
+        reset = Gtk.Button(label=t("vis_reset_all"))
+        reset.connect("clicked", self.reset_all_visual)
+        box.pack_end(reset, False, False, 0)
         return box
 
-    def pick_visual_folder(self, *_):
-        dialog = Gtk.FileChooserDialog(title=t("vis_pick"), transient_for=self, action=Gtk.FileChooserAction.SELECT_FOLDER)
+    def pick_visual_path(self, _btn, folder):
+        action = Gtk.FileChooserAction.SELECT_FOLDER if folder else Gtk.FileChooserAction.OPEN
+        dialog = Gtk.FileChooserDialog(title=t("vis_path"), transient_for=self, action=action)
         dialog.add_buttons("Cancel" if not RU else "Отмена", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
         if dialog.run() == Gtk.ResponseType.OK:
-            self.vis_folder = dialog.get_filename()
-            self.vis_folder_label.set_text(self.vis_folder)
-            self.vis_entry.set_text(self.read_folder_name(self.vis_folder) or os.path.basename(self.vis_folder))
+            self.vis_path = dialog.get_filename()
+            self.vis_path_label.set_text(self.vis_path)
+            isdir = os.path.isdir(self.vis_path)
+            keys = dir_read_keys(self.vis_path) if isdir else {}
+            self.vis_name.set_sensitive(isdir)
+            self.vis_icon.set_sensitive(isdir)
+            self.vis_name.set_text(keys.get("Name") or os.path.basename(self.vis_path))
+            self.vis_icon.get_child().set_text(keys.get("Icon") or "")
+            self.vis_comment.set_text(xattr_get(self.vis_path, "user.xdg.comment") or "")
+            self.vis_tags.set_text(xattr_get(self.vis_path, "user.xdg.tags") or "")
+            try:
+                self.vis_rating.set_value(int(xattr_get(self.vis_path, "user.baloo.rating") or 0) // 2)
+            except ValueError:
+                self.vis_rating.set_value(0)
         dialog.destroy()
 
-    @staticmethod
-    def read_folder_name(folder):
-        try:
-            with open(os.path.join(folder, ".directory"), encoding="utf-8") as f:
-                sec = None
-                for line in f:
-                    st = line.strip()
-                    if st.startswith("[") and st.endswith("]"):
-                        sec = st[1:-1]
-                    elif sec == "Desktop Entry" and st.startswith("Name="):
-                        return st[5:]
-        except OSError:
-            pass
-        return ""
-
-    def apply_visual_name(self, _btn, reset):
-        if not self.vis_folder:
+    def apply_visual(self, *_):
+        if not self.vis_path:
             self.append_log(t("vis_nofolder"))
             return
-        name = "" if reset else self.vis_entry.get_text().replace("\n", " ").strip()
+        db = vis_load()
+        path = self.vis_path
         try:
-            edit_directory_file(self.vis_folder, name)
+            if os.path.isdir(path):
+                entry = db["folders"].setdefault(path, dir_read_keys(path, ("Name", "Icon")))
+                name = self.vis_name.get_text().replace("\n", " ").strip()
+                icon = self.vis_icon.get_child().get_text().strip()
+                dir_write_keys(path, {"Name": name if name and name != os.path.basename(path) else None,
+                                      "Icon": icon or None})
         except OSError as e:
             self.append_log(t("vis_fail") % e)
             return
-        if reset:
-            self.vis_entry.set_text(os.path.basename(self.vis_folder))
+        try:
+            saved = db["xattrs"].setdefault(path, {})
+            for attr, value in (("user.xdg.comment", self.vis_comment.get_text().strip()),
+                                ("user.xdg.tags", self.vis_tags.get_text().strip()),
+                                ("user.baloo.rating", str(int(self.vis_rating.get_value()) * 2)
+                                 if self.vis_rating.get_value() else "")):
+                saved.setdefault(attr, xattr_get(path, attr))
+                xattr_set(path, attr, value or None)
+        except OSError as e:
+            self.append_log(t("vis_xattr_fail") % e)
+        vis_save(db)
         self.append_log(t("vis_done"))
+
+    def revert_visual(self, *_):
+        if not self.vis_path:
+            self.append_log(t("vis_nofolder"))
+            return
+        db = vis_load()
+        vis_restore(db, self.vis_path)
+        vis_save(db)
+        self.append_log(t("vis_done"))
+
+    def add_place(self, *_):
+        folder = self.vis_path if self.vis_path and os.path.isdir(self.vis_path) else None
+        label = self.places_label.get_text().strip()
+        if not folder:
+            self.append_log(t("vis_nofolder"))
+            return
+        if not places_add(folder, label or os.path.basename(folder), self.places_icon.get_child().get_text().strip() or "folder"):
+            self.append_log(t("vis_places_none"))
+            return
+        self.append_log(t("vis_done"))
+
+    def reset_all_visual(self, *_):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.YES_NO, text=t("vis_reset_ask"))
+        answer = dialog.run()
+        dialog.destroy()
+        if answer != Gtk.ResponseType.YES:
+            return
+        db = vis_load()
+        for path in list(db["folders"]) + list(db["xattrs"]):
+            vis_restore(db, path)
+        places_clear()
+        vis_save(db)
+        self.set_cursor_size(None, 28)
+        self.append_log(t("vis_reset_done"))
 
     def set_cursor_size(self, _btn, size):
         theme = subprocess.run(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"],

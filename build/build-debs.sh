@@ -905,6 +905,9 @@ PANEL_JS = (
     ' "org.kde.plasma.devicenotifier", "org.kde.plasma.clipboard"]);'
     ' var clock = p.addWidget("org.kde.plasma.digitalclock"); clock.currentConfigGroup = ["Appearance"];'
     ' clock.writeConfig("autoFontAndSize", false); clock.writeConfig("fontSize", 13);'
+    ' clock.writeConfig("fontFamily", "Noto Sans"); clock.writeConfig("boldText", false);'
+    ' clock.writeConfig("italicText", false); clock.writeConfig("fontWeight", 400);'
+    ' clock.writeConfig("fontStyleName", "Regular");'
     ' "ok widgets=" + p.widgets().length + " bad=" + bad.join(","); }'
 )
 
@@ -949,12 +952,21 @@ CLOCK_SIZE = 13
 
 
 def clock():
-    """размер часов в панели: среднее между слишком большим и слишком маленьким"""
+    """часы в панели: обычный шрифт системы, не жирный, средний размер"""
+    family = "Noto Sans"
+    if shutil.which("kreadconfig6"):
+        out = subprocess.run(["kreadconfig6", "--file", "kdeglobals", "--group", "General", "--key", "font"],
+                             capture_output=True, text=True).stdout.strip().split(",")[0]
+        if out and re.match(r"^[\w .-]+$", out):
+            family = out
     js = ('var n = 0; var ps = panels(); for (var i = 0; i < ps.length; i++) {'
           ' var ws = ps[i].widgets("org.kde.plasma.digitalclock");'
           ' for (var j = 0; j < ws.length; j++) { ws[j].currentConfigGroup = ["Appearance"];'
           ' ws[j].writeConfig("autoFontAndSize", false); ws[j].writeConfig("fontSize", %d);'
-          ' ws[j].reloadConfig(); n++; } } "clock=" + n;' % CLOCK_SIZE)
+          ' ws[j].writeConfig("fontFamily", "%s"); ws[j].writeConfig("boldText", false);'
+          ' ws[j].writeConfig("italicText", false); ws[j].writeConfig("fontWeight", 400);'
+          ' ws[j].writeConfig("fontStyleName", "Regular");'
+          ' ws[j].reloadConfig(); n++; } } "clock=" + n;' % (CLOCK_SIZE, family))
     out = plasma_eval(js)
     m = re.search(r"clock=(\d+)", out or "")
     if not (m and int(m.group(1)) > 0):
@@ -1239,7 +1251,7 @@ STEPS = (
     ("apps", 3, apps),
     ("panel", 4, panel),
     ("kbdisplay", 3, kbdisplay),
-    ("clock", 1, clock),
+    ("clock", 2, clock),
     ("lockwall", 1, lockwall),
     ("kwin", 1, kwin),
     ("sounds", 1, sounds),
