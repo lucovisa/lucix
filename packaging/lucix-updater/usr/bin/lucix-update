@@ -1169,8 +1169,19 @@ class Updater(Gtk.Window):
             return r.returncode, (r.stdout + r.stderr).strip()
         rc, theme = out(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"])
         theme = theme if rc == 0 and theme else "Lucix-Cursor"
-        out(["kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", str(size)])
+        # настройку заранее не пишем: иначе Plasma решит, что ничего не изменилось, и не применит размер
         rc, text = out(["plasma-apply-cursortheme", "--size", str(size), theme])
+        if rc == 0 and ("already" in text.lower() or "уже" in text.lower()):
+            # Plasma считает, что набор уже включён: переключаем на другой и обратно, чтобы размер точно применился
+            for other in ("breeze_cursors", "Breeze_Snow", "Adwaita"):
+                if os.path.isdir("/usr/share/icons/" + other):
+                    out(["plasma-apply-cursortheme", other])
+                    rc, text = out(["plasma-apply-cursortheme", "--size", str(size), theme])
+                    break
+        out(["kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", str(size)])
+        for gtk in ("gtk-3.0", "gtk-4.0"):
+            out(["kwriteconfig6", "--file", os.path.join(os.path.expanduser("~"), ".config", gtk, "settings.ini"),
+                 "--group", "Settings", "--key", "gtk-cursor-theme-size", str(size)])
         self.append_log("%s: %d (%s) -> %s %s" % (t("vis_cursor"), size, theme, "OK" if rc == 0 else "ERROR", text[-300:]))
 
     #вкладка система

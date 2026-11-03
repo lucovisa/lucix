@@ -205,17 +205,8 @@ PYGUI
     cp "$ROOT_DIR/overlay/usr/sbin/lucix-boot-first" "$tmp/usr/sbin/lucix-boot-first"
     chmod 0755 "$tmp/usr/sbin/lucix-boot-first"
     #оформление: обои и экран входа
-    mkdir -p "$tmp/usr/share/backgrounds/lucix" "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d"
+    mkdir -p "$tmp/usr/share/backgrounds/lucix"
     cp "$ROOT_DIR/overlay/usr/share/backgrounds/lucix/lucix.jpg" "$tmp/usr/share/backgrounds/lucix/lucix.jpg"
-    cat > "$tmp/etc/lightdm/lightdm-gtk-greeter.conf.d/50-lucix.conf" <<'GREETER'
-[greeter]
-background=/usr/share/backgrounds/lucix/lucix.jpg
-user-background=false
-theme-name=Breeze-Dark
-icon-theme-name=breeze-dark
-font-name=Ubuntu 11
-indicators=~host;~spacer;~clock;~spacer;~layout;~session;~a11y;~power
-GREETER
 
     #рабочий стол Plasma: скрипт настроек и автозапуск
     mkdir -p "$tmp/usr/share/lucix" "$tmp/etc/xdg/autostart"
@@ -1067,13 +1058,14 @@ def cursor():
         run("gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme)
         run("gsettings", "set", "org.gnome.desktop.interface", "cursor-size", CURSOR_SIZE)
     #применяем в Plasma в самом конце: если не получится, всё остальное уже сделано
+    #сначала просим Plasma применить сама (если записать настройку заранее, она решит, что ничего не изменилось)
+    applied = shutil.which("plasma-apply-cursortheme") and (
+        run("plasma-apply-cursortheme", "--size", CURSOR_SIZE, theme) == 0 or run("plasma-apply-cursortheme", theme) == 0)
     if shutil.which("kwriteconfig6"):
         run("kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme", theme)
         run("kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", CURSOR_SIZE)
-    if shutil.which("plasma-apply-cursortheme"):
-        if run("plasma-apply-cursortheme", "--size", CURSOR_SIZE, theme) != 0:
-            if run("plasma-apply-cursortheme", theme) != 0:
-                return False
+    if not applied:
+        return False
 
 
 def trash():
