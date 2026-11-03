@@ -8,7 +8,7 @@ import urllib.request
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk, Pango
+from gi.repository import Gdk, GLib, Gtk, Pango
 
 REPO = "lucovisa/lucix"
 HELPER = "/usr/lib/lucix/lucix-helper"
@@ -60,6 +60,29 @@ TEXT = {
     "tab_features": ("Features", "Функции"),
     "tab_disks": ("Disks", "Диски"),
     "disks_note": ("Free memory: pick volumes to erase and attach to Lucix, for example for Steam games. ALL DATA on them is erased. Volumes right after the Lucix partition are added to Lucix itself, others become a separate drive in /freememory. System volumes are hidden.", "Свободная память: выберите тома, которые будут стёрты и присоединены к Lucix, например для игр Steam. ВСЕ ДАННЫЕ НА НИХ БУДУТ СТЁРТЫ. Тома, которые лежат вплотную после раздела Lucix, добавляются к самому Lucix, остальные подключаются отдельным диском в /freememory. Системные тома не показываются."),
+    "tab_visual": ("Visual", "Визуал"),
+    "disks_keep": ("Do not format: keep the data (the volume is just attached)", "Не форматировать: сохранить данные (том просто подключится)"),
+    "disks_attached": ("Already attached", "Уже подключено"),
+    "disks_rename": ("Rename", "Переименовать"),
+    "disks_detach": ("Detach", "Отключить"),
+    "disks_newname": ("New folder name:", "Новое имя папки:"),
+    "disks_keep_bad": ("Cannot keep data on %s: this file system is not supported. Format the volume instead.", "Нельзя сохранить данные на %s: эта файловая система не поддерживается. Отформатируйте том."),
+    "disks_keep_plan": ("Will be attached, data is kept: %s", "Подключатся, данные сохранятся: %s"),
+    "disks_nolucix": ("The disk with Lucix was not found.", "Диск с Lucix не найден."),
+    "confirm_detach": ("Detach %s? Files stay on the disk.", "Отключить %s? Файлы на диске останутся."),
+    "copy_launch": ("Copy launch option", "Копировать параметр запуска"),
+    "copied": ("Copied: %s", "Скопировано: %s"),
+    "vis_note": ("Look of the file manager and cursor. Changes are only visual: the real names and sizes do not change.", "Внешний вид проводника и курсора. Изменения только визуальные: настоящие имена и размеры не меняются."),
+    "vis_folder": ("Folder name in the file manager", "Название папки в проводнике"),
+    "vis_pick": ("Choose folder...", "Выбрать папку..."),
+    "vis_name": ("Name shown:", "Показывать как:"),
+    "vis_apply": ("Apply", "Применить"),
+    "vis_reset": ("Show the real name", "Вернуть настоящее имя"),
+    "vis_hint": ("Shown in Dolphin and KDE dialogs; the terminal and other programs see the real name. Press F5 in Dolphin if it does not update.", "Видно в Dolphin и окнах KDE; терминал и другие программы видят настоящее имя. Если не обновилось, нажмите F5 в Dolphin."),
+    "vis_nofolder": ("Choose a folder first.", "Сначала выберите папку."),
+    "vis_done": ("Done.", "Готово."),
+    "vis_fail": ("Could not write to this folder: %s", "Не удалось записать в эту папку: %s"),
+    "vis_cursor": ("Cursor size", "Размер курсора"),
     "disks_none": ("No volumes available.", "Подходящих томов нет."),
     "disks_btn": ("Format and attach", "Форматировать и присоединить"),
     "disks_refresh": ("Refresh list", "Обновить список"),
@@ -193,6 +216,39 @@ except Exception:
     H = None
 
 
+def edit_directory_file(folder, name):
+    """показываемое имя папки в Dolphin: ключ Name в файле .directory (пустое имя убирает его)"""
+    path = os.path.join(folder, ".directory")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    out, sec, inserted = [], None, False
+    for line in lines:
+        st = line.strip()
+        if st.startswith("[") and st.endswith("]"):
+            if sec == "Desktop Entry" and name and not inserted:
+                out.append("Name=" + name)
+                inserted = True
+            sec = st[1:-1]
+        elif sec == "Desktop Entry" and (st.startswith("Name=") or st.startswith("Name[")):
+            continue
+        out.append(line)
+    if sec == "Desktop Entry" and name and not inserted:
+        out.append("Name=" + name)
+        inserted = True
+    if name and not inserted:
+        out = ["[Desktop Entry]", "Name=" + name] + out
+    meaningful = [l for l in out if l.strip() and l.strip() != "[Desktop Entry]"]
+    if not meaningful:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
 def deb_version(tag):
     return tag.lstrip("v").replace("-", "~")
 
@@ -243,6 +299,7 @@ class Updater(Gtk.Window):
         notebook.append_page(self.build_apps_tab(), Gtk.Label(label=t("tab_apps")))
         notebook.append_page(self.build_features_tab(), Gtk.Label(label=t("tab_features")))
         notebook.append_page(self.build_disks_tab(), Gtk.Label(label=t("tab_disks")))
+        notebook.append_page(self.build_visual_tab(), Gtk.Label(label=t("tab_visual")))
         notebook.append_page(self.build_system_tab(), Gtk.Label(label=t("tab_system")))
         notebook.append_page(self.build_drivers_tab(), Gtk.Label(label=t("tab_drivers")))
 
@@ -395,6 +452,7 @@ class Updater(Gtk.Window):
             title.set_markup("<b>%s</b> - %s" % (GLib.markup_escape_text(name), GLib.markup_escape_text(state)))
             desc = Gtk.Label(label=feat["desc"][idx], xalign=0)
             desc.set_line_wrap(True)
+            desc.set_selectable(True)
             row.pack_start(title, False, False, 0)
             row.pack_start(desc, False, False, 0)
             bar = Gtk.Box(spacing=6)
@@ -405,9 +463,17 @@ class Updater(Gtk.Window):
                     btn.set_sensitive(False)
                 bar.pack_start(btn, False, False, 0)
                 self.feat_buttons.append(btn)
+            if feat.get("launch"):
+                cp = Gtk.Button(label=t("copy_launch"))
+                cp.connect("clicked", self.copy_text, feat["launch"])
+                bar.pack_start(cp, False, False, 0)
             row.pack_start(bar, False, False, 0)
             self.feat_box.pack_start(row, False, False, 0)
         self.feat_box.show_all()
+
+    def copy_text(self, _btn, text):
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+        self.append_log(t("copied") % text)
 
     def on_feature_button(self, _btn, args, confirm):
         if confirm:
@@ -435,8 +501,10 @@ class Updater(Gtk.Window):
         self.disk_tree = []
         refresh = Gtk.Button(label=t("disks_refresh"))
         refresh.connect("clicked", lambda *_: self.refresh_disks())
+        self.keep_chk = Gtk.CheckButton(label=t("disks_keep"))
         self.disk_btn = Gtk.Button(label=t("disks_btn"))
         self.disk_btn.connect("clicked", self.format_disks)
+        box.pack_start(self.keep_chk, False, False, 0)
         box.pack_start(refresh, False, False, 0)
         box.pack_start(self.disk_btn, False, False, 0)
         self.busy_widgets += [refresh, self.disk_btn]
@@ -457,53 +525,204 @@ class Updater(Gtk.Window):
             except Exception:
                 self.disk_tree = []
         root = H.find_root(self.disk_tree) if H is not None else None
-        root_disk = root["disk"]["path"] if root else None
-        groups = []
-        for disk in self.disk_tree:
-            if disk.get("type") != "disk":
-                continue
-            cands = [p for p in (disk.get("children") or []) if p.get("type") == "part" and not H.part_protected(p)]
-            if not cands:
-                continue
-            gb = H.to_int(disk.get("size")) / 1e9
-            title = "%s  %s  %.0f GB" % (disk["path"], disk.get("model") or "", gb)
-            groups.append((disk["path"] != root_disk, title, disk["path"] == root_disk, cands))
-        for _other, title, is_root, cands in sorted(groups, key=lambda g: g[0]):
-            head = Gtk.Label(xalign=0)
-            text = (t("disks_lucix") % title) if is_root else ("%s: %s" % (t("disks_others"), title))
-            head.set_markup("<b>%s</b>" % GLib.markup_escape_text(text))
-            self.disks_box.pack_start(head, False, False, 4)
-            for node in sorted(cands, key=lambda n: H.to_int(n.get("start"))):
-                fs = node.get("fstype") or "?"
-                extra = " [%s]" % t("disks_win") if fs in ("ntfs", "BitLocker") else ""
-                label = "%s  -  %.1f GB  -  %s%s  %s" % (node["path"], H.to_int(node.get("size")) / 1e9, fs, extra,
-                                                       node.get("label") or "")
-                chk = Gtk.CheckButton(label=label)
-                self.disk_checks[node["path"]] = chk
-                self.disks_box.pack_start(chk, False, False, 0)
-        if not self.disk_checks:
+        if root is None and H is not None:
+            for disk in self.disk_tree:  # корень на LVM и т.п.: диск всё равно найдём
+                if disk.get("type") == "disk" and any("/" in H.node_mounts(p) for p in disk.get("children") or []):
+                    root = {"disk": disk, "part": None}
+        if root is None:
+            self.disks_box.pack_start(Gtk.Label(label=t("disks_nolucix"), xalign=0), False, False, 0)
+            self.disks_box.show_all()
+            return
+        disk = root["disk"]
+        title = "%s  %s  %.0f GB" % (disk["path"], disk.get("model") or "", H.to_int(disk.get("size")) / 1e9)
+        head = Gtk.Label(xalign=0)
+        head.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("disks_lucix") % title))
+        self.disks_box.pack_start(head, False, False, 4)
+        cands, attached = [], []
+        for node in sorted([p for p in (disk.get("children") or []) if p.get("type") == "part"],
+                           key=lambda n: H.to_int(n.get("start"))):
+            mounts = [m for m in H.node_mounts(node) if m.startswith(H.DISKS_DIR + "/")]
+            if mounts:
+                attached.append((node, mounts[0]))
+            elif not H.part_protected(node):
+                cands.append(node)
+        for node in cands:
+            fs = node.get("fstype") or "?"
+            extra = " [%s]" % t("disks_win") if fs in ("ntfs", "BitLocker") else ""
+            label = "%s  -  %.1f GB  -  %s%s  %s" % (node["path"], H.to_int(node.get("size")) / 1e9, fs, extra,
+                                                   node.get("label") or "")
+            chk = Gtk.CheckButton(label=label)
+            self.disk_checks[node["path"]] = chk
+            self.disks_box.pack_start(chk, False, False, 0)
+        if not cands:
             self.disks_box.pack_start(Gtk.Label(label=t("disks_none"), xalign=0), False, False, 0)
+        self.keep_chk.set_visible(bool(cands))
+        if attached:
+            sub = Gtk.Label(xalign=0)
+            sub.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("disks_attached")))
+            self.disks_box.pack_start(sub, False, False, 8)
+            for node, mnt in attached:
+                row = Gtk.Box(spacing=6)
+                row.pack_start(Gtk.Label(label="%s  -  %.1f GB  -  %s" % (mnt, H.to_int(node.get("size")) / 1e9,
+                                                                         node.get("fstype") or "?"), xalign=0), True, True, 0)
+                rn = Gtk.Button(label=t("disks_rename"))
+                rn.connect("clicked", self.rename_disk, mnt)
+                dt = Gtk.Button(label=t("disks_detach"))
+                dt.connect("clicked", self.detach_disk, mnt)
+                for w in (rn, dt):
+                    row.pack_start(w, False, False, 0)
+                    self.feat_buttons.append(w)
+                    if IS_LIVE:
+                        w.set_sensitive(False)
+                self.disks_box.pack_start(row, False, False, 0)
         self.disks_box.show_all()
+        self.keep_chk.set_visible(bool(cands))
+
+    def rename_disk(self, _btn, mnt):
+        dialog = Gtk.Dialog(title=t("disks_rename"), transient_for=self, modal=True)
+        dialog.add_buttons("OK", Gtk.ResponseType.OK, "Cancel" if not RU else "Отмена", Gtk.ResponseType.CANCEL)
+        area = dialog.get_content_area()
+        area.set_border_width(10)
+        area.pack_start(Gtk.Label(label=t("disks_newname")), False, False, 4)
+        entry = Gtk.Entry()
+        entry.set_text(os.path.basename(mnt))
+        entry.set_activates_default(True)
+        area.pack_start(entry, False, False, 4)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        dialog.show_all()
+        answer = dialog.run()
+        name = entry.get_text().strip()
+        dialog.destroy()
+        if answer == Gtk.ResponseType.OK and name and name != os.path.basename(mnt):
+            self.run_helper(["disk-rename", mnt, name])
+
+    def detach_disk(self, _btn, mnt):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.YES_NO, text=t("confirm_detach") % mnt)
+        answer = dialog.run()
+        dialog.destroy()
+        if answer == Gtk.ResponseType.YES:
+            self.run_helper(["disk-detach", mnt])
 
     def format_disks(self, *_):
         picked = [p for p, c in self.disk_checks.items() if c.get_active()]
         if not picked:
             self.append_log(t("disks_pick"))
             return
-        plan = H.make_plan(self.disk_tree, picked)
+        keep = self.keep_chk.get_active()
         lines = []
-        if plan["join"]:
-            lines.append(t("disks_join") % ", ".join(plan["join"]))
-        if plan["attach"]:
-            lines.append(t("disks_attach") % ", ".join(plan["attach"]))
-        lines.append("")
-        lines.append(t("disks_sure"))
-        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.WARNING,
+        if keep:
+            nodes = H.list_parts(self.disk_tree)
+            for d in picked:
+                if nodes[d].get("fstype") not in H.KEEP_FS:
+                    self.append_log(t("disks_keep_bad") % d)
+                    return
+            lines.append(t("disks_keep_plan") % ", ".join(picked))
+        else:
+            plan = H.make_plan(self.disk_tree, picked)
+            if plan["join"]:
+                lines.append(t("disks_join") % ", ".join(plan["join"]))
+            if plan["attach"]:
+                lines.append(t("disks_attach") % ", ".join(plan["attach"]))
+            lines += ["", t("disks_sure")]
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True,
+                                   message_type=Gtk.MessageType.QUESTION if keep else Gtk.MessageType.WARNING,
                                    buttons=Gtk.ButtonsType.YES_NO, text="\n".join(lines))
         answer = dialog.run()
         dialog.destroy()
         if answer == Gtk.ResponseType.YES:
-            self.run_helper(["disk-format", "--yes", ",".join(picked)])
+            args = ["disk-format", "--yes", ",".join(picked)]
+            self.run_helper(args + (["--keep"] if keep else []))
+
+    #вкладка визуал
+    def build_visual_tab(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(8)
+        note = Gtk.Label(label=t("vis_note"), xalign=0)
+        note.set_line_wrap(True)
+        box.pack_start(note, False, False, 0)
+        title = Gtk.Label(xalign=0)
+        title.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("vis_folder")))
+        box.pack_start(title, False, False, 6)
+        self.vis_folder = None
+        self.vis_folder_label = Gtk.Label(label="-", xalign=0)
+        pick = Gtk.Button(label=t("vis_pick"))
+        pick.connect("clicked", self.pick_visual_folder)
+        row = Gtk.Box(spacing=6)
+        row.pack_start(pick, False, False, 0)
+        row.pack_start(self.vis_folder_label, True, True, 0)
+        box.pack_start(row, False, False, 0)
+        row2 = Gtk.Box(spacing=6)
+        row2.pack_start(Gtk.Label(label=t("vis_name")), False, False, 0)
+        self.vis_entry = Gtk.Entry()
+        row2.pack_start(self.vis_entry, True, True, 0)
+        box.pack_start(row2, False, False, 0)
+        row3 = Gtk.Box(spacing=6)
+        apply_btn = Gtk.Button(label=t("vis_apply"))
+        apply_btn.connect("clicked", self.apply_visual_name, False)
+        reset_btn = Gtk.Button(label=t("vis_reset"))
+        reset_btn.connect("clicked", self.apply_visual_name, True)
+        row3.pack_start(apply_btn, False, False, 0)
+        row3.pack_start(reset_btn, False, False, 0)
+        box.pack_start(row3, False, False, 0)
+        hint = Gtk.Label(label=t("vis_hint"), xalign=0)
+        hint.set_line_wrap(True)
+        box.pack_start(hint, False, False, 0)
+        ctitle = Gtk.Label(xalign=0)
+        ctitle.set_markup("<b>%s</b>" % GLib.markup_escape_text(t("vis_cursor")))
+        box.pack_start(ctitle, False, False, 10)
+        crow = Gtk.Box(spacing=6)
+        for size in (24, 28, 32, 36, 40, 48):
+            btn = Gtk.Button(label=str(size))
+            btn.connect("clicked", self.set_cursor_size, size)
+            crow.pack_start(btn, False, False, 0)
+        box.pack_start(crow, False, False, 0)
+        return box
+
+    def pick_visual_folder(self, *_):
+        dialog = Gtk.FileChooserDialog(title=t("vis_pick"), transient_for=self, action=Gtk.FileChooserAction.SELECT_FOLDER)
+        dialog.add_buttons("Cancel" if not RU else "Отмена", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
+        if dialog.run() == Gtk.ResponseType.OK:
+            self.vis_folder = dialog.get_filename()
+            self.vis_folder_label.set_text(self.vis_folder)
+            self.vis_entry.set_text(self.read_folder_name(self.vis_folder) or os.path.basename(self.vis_folder))
+        dialog.destroy()
+
+    @staticmethod
+    def read_folder_name(folder):
+        try:
+            with open(os.path.join(folder, ".directory"), encoding="utf-8") as f:
+                sec = None
+                for line in f:
+                    st = line.strip()
+                    if st.startswith("[") and st.endswith("]"):
+                        sec = st[1:-1]
+                    elif sec == "Desktop Entry" and st.startswith("Name="):
+                        return st[5:]
+        except OSError:
+            pass
+        return ""
+
+    def apply_visual_name(self, _btn, reset):
+        if not self.vis_folder:
+            self.append_log(t("vis_nofolder"))
+            return
+        name = "" if reset else self.vis_entry.get_text().replace("\n", " ").strip()
+        try:
+            edit_directory_file(self.vis_folder, name)
+        except OSError as e:
+            self.append_log(t("vis_fail") % e)
+            return
+        if reset:
+            self.vis_entry.set_text(os.path.basename(self.vis_folder))
+        self.append_log(t("vis_done"))
+
+    def set_cursor_size(self, _btn, size):
+        theme = subprocess.run(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"],
+                               capture_output=True, text=True).stdout.strip() or "Lucix-Cursor"
+        subprocess.run(["kwriteconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorSize", str(size)])
+        subprocess.run(["plasma-apply-cursortheme", "--size", str(size), theme])
+        self.append_log("%s: %d" % (t("vis_cursor"), size))
 
     #вкладка система
     def build_system_tab(self):

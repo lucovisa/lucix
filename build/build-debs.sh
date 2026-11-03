@@ -994,11 +994,17 @@ def sounds():
         run("xset", "b", "off")
 
 
-CURSOR_SIZE = "32"
+CURSOR_SIZE = "28"
+
+
+def write_text(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def cursor():
-    """курсор Lucix по умолчанию (если он есть) и средний размер; сменить можно в настройках в любой момент"""
+    """курсор Lucix по умолчанию (если он есть), размер чуть меньше прежнего, и чтобы он был в любых приложениях"""
     theme = "Lucix-Cursor" if os.path.isdir("/usr/share/icons/Lucix-Cursor") else ""
     if not theme and shutil.which("kreadconfig6"):
         theme = subprocess.run(["kreadconfig6", "--file", "kcminputrc", "--group", "Mouse", "--key", "cursorTheme"],
@@ -1010,6 +1016,36 @@ def cursor():
     if run("plasma-apply-cursortheme", "--size", CURSOR_SIZE, theme) != 0:
         if run("plasma-apply-cursortheme", theme) != 0:
             return False
+    #тема в домашней папке: её видят и приложения Flatpak
+    src = os.path.join("/usr/share/icons", theme)
+    if os.path.isdir(src):
+        try:
+            shutil.copytree(src, os.path.join(HOME, ".local", "share", "icons", theme), symlinks=True, dirs_exist_ok=True)
+        except (OSError, shutil.Error) as e:
+            log("копирование курсора: %r" % (e,))
+    #курсор «по умолчанию» для X11-программ, Wine, Java и всего, что не читает настройки Plasma
+    index = "[Icon Theme]\nName=Default\nInherits=%s\n" % theme
+    for d in (os.path.join(HOME, ".icons", "default"), os.path.join(HOME, ".local", "share", "icons", "default")):
+        try:
+            write_text(os.path.join(d, "index.theme"), index)
+        except OSError as e:
+            log("index.theme: %r" % (e,))
+    if shutil.which("kwriteconfig6"):
+        for gtk in ("gtk-3.0", "gtk-4.0"):
+            ini = os.path.join(HOME, ".config", gtk, "settings.ini")
+            os.makedirs(os.path.dirname(ini), exist_ok=True)
+            run("kwriteconfig6", "--file", ini, "--group", "Settings", "--key", "gtk-cursor-theme-name", theme)
+            run("kwriteconfig6", "--file", ini, "--group", "Settings", "--key", "gtk-cursor-theme-size", CURSOR_SIZE)
+    try:
+        write_text(os.path.join(HOME, ".config", "plasma-workspace", "env", "lucix-cursor.sh"),
+                   "export XCURSOR_THEME=%s\nexport XCURSOR_SIZE=%s\n" % (theme, CURSOR_SIZE))
+    except OSError as e:
+        log("env: %r" % (e,))
+    if shutil.which("flatpak"):
+        run("flatpak", "override", "--user", "--env=XCURSOR_THEME=" + theme, "--env=XCURSOR_SIZE=" + CURSOR_SIZE)
+    if shutil.which("gsettings"):
+        run("gsettings", "set", "org.gnome.desktop.interface", "cursor-theme", theme)
+        run("gsettings", "set", "org.gnome.desktop.interface", "cursor-size", CURSOR_SIZE)
 
 
 def trash():
@@ -1207,7 +1243,7 @@ STEPS = (
     ("lockwall", 1, lockwall),
     ("kwin", 1, kwin),
     ("sounds", 1, sounds),
-    ("cursor", 2, cursor),
+    ("cursor", 3, cursor),
     ("trash", 3, trash),
     ("privacy", 2, privacy),
     ("memory", 1, memory),

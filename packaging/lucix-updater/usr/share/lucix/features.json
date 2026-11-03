@@ -13,7 +13,8 @@
       "desc": [
         "Boosts game performance while a game runs (use: gamemoderun %command% in Steam launch options)",
         "Ускоряет игры, пока игра запущена (в Steam: gamemoderun %command% в параметрах запуска)"
-      ]
+      ],
+      "launch": "gamemoderun %command%"
     },
     {
       "id": "gamescope",
@@ -28,7 +29,8 @@
       "desc": [
         "Game compositor: fullscreen, resolution scaling, FSR (use: gamescope -f -- %command%)",
         "Игровое окружение: полный экран, масштабирование, FSR (в Steam: gamescope -f -- %command%)"
-      ]
+      ],
+      "launch": "gamescope -f -- %command%"
     },
     {
       "id": "mangohud",
@@ -43,7 +45,8 @@
       "desc": [
         "FPS and system monitor overlay in games (use: mangohud %command%)",
         "Счётчик FPS и нагрузки поверх игры (в Steam: mangohud %command%)"
-      ]
+      ],
+      "launch": "mangohud %command%"
     },
     {
       "id": "grub-theme",

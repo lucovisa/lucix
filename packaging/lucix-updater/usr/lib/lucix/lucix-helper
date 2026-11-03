@@ -415,6 +415,18 @@ def list_parts(tree):
     return found
 
 
+def fstab_path(p):
+    return p.replace(" ", "\\040")
+
+
+def fstab_write(lines):
+    with open("/etc/fstab", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+KEEP_FS = ("ext4", "ext3", "ext2", "btrfs", "xfs", "ntfs")
+
+
 def fstab_drop(dev, uuid):
     path = "/etc/fstab"
     with open(path, encoding="utf-8") as f:
@@ -518,10 +530,9 @@ def grow_root_fs(root):
     return False
 
 
-def attach_partition(node, d, pw):
+def attach_partition(node, d, pw, keep=False):
     base = os.path.basename(d)
-    label = ("freemem-" + base)[:16]
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", node.get("label") or "").strip("._-") or base
+    name = re.sub(r"[^\w.-]", "_", node.get("label") or "").strip("._-") or base
     mnt = os.path.join(DISKS_DIR, name)
     if os.path.ismount(mnt) or (os.path.isdir(mnt) and os.listdir(mnt)):
         mnt = os.path.join(DISKS_DIR, name + "-" + base)
@@ -530,25 +541,41 @@ def attach_partition(node, d, pw):
         if run(["umount", m]) != 0:
             say("cannot unmount " + m)
             return None
-    if run(["wipefs", "-a", d]) != 0 or run(["mkfs.ext4", "-F", "-m", "0", "-L", label, d]) != 0:
-        say("FAILED " + d)
-        return None
-    r = subprocess.run(["blkid", "-s", "UUID", "-o", "value", d], capture_output=True, text=True)
-    uuid = r.stdout.strip()
+    if keep:
+        fstype = node.get("fstype")
+        uuid = node.get("uuid") or ""
+    else:
+        fstype = "ext4"
+        label = os.path.basename(mnt)[:16]
+        if run(["wipefs", "-a", d]) != 0 or run(["mkfs.ext4", "-F", "-m", "0", "-L", label, d]) != 0:
+            say("FAILED " + d)
+            return None
+        r = subprocess.run(["blkid", "-s", "UUID", "-o", "value", d], capture_output=True, text=True)
+        uuid = r.stdout.strip()
     if not uuid:
         say("no UUID for " + d)
         return None
+    if fstype == "ntfs":
+        opts = "uid=%d,gid=%d,nofail,noatime,windows_names" % (pw.pw_uid, pw.pw_gid)
+        entry = "UUID=%s %s ntfs3 %s 0 0" % (uuid, fstab_path(mnt), opts)
+    else:
+        entry = "UUID=%s %s %s defaults,nofail,noatime 0 %s" % (uuid, fstab_path(mnt), fstype, "2" if fstype.startswith("ext") else "0")
     lines = fstab_drop(d, node.get("uuid"))
-    lines.append("UUID=%s %s ext4 defaults,nofail,noatime 0 2" % (uuid, mnt))
-    with open("/etc/fstab", "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+    lines.append(entry)
+    fstab_write(lines)
     os.makedirs(mnt, exist_ok=True)
     run(["systemctl", "daemon-reload"])
     if run(["mount", mnt]) != 0:
         say("cannot mount " + mnt)
         return None
-    os.makedirs(os.path.join(mnt, "SteamLibrary"), exist_ok=True)
-    run(["chown", "-R", "%d:%d" % (pw.pw_uid, pw.pw_gid), mnt])
+    ids = "%d:%d" % (pw.pw_uid, pw.pw_gid)
+    lib = os.path.join(mnt, "SteamLibrary")
+    os.makedirs(lib, exist_ok=True)
+    if keep:  # чужие файлы не трогаем: только корень и папка для Steam
+        run(["chown", ids, mnt])
+        run(["chown", ids, lib])
+    else:
+        run(["chown", "-R", ids, mnt])
     link = os.path.join(pw.pw_dir, "freememory")  # ссылка в домашней папке, чтобы было под рукой
     if not os.path.lexists(link):
         os.symlink(DISKS_DIR, link)
@@ -557,7 +584,7 @@ def attach_partition(node, d, pw):
     return mnt
 
 
-def disk_format(arg):
+def disk_format(arg, keep=False):
     devs = [d for d in arg.split(",") if d]
     if not devs or len(devs) > 8 or len(set(devs)) != len(devs) or not all(DEV_RE.match(d) for d in devs):
         say("bad device list")
@@ -576,7 +603,14 @@ def disk_format(arg):
         if part_protected(parts[d]):
             say("refusing system partition " + d)
             return 2
-    plan = make_plan(tree, devs)
+    if keep:
+        for d in devs:
+            if parts[d].get("fstype") not in KEEP_FS:
+                say("cannot keep data on %s: file system is not supported" % d)
+                return 2
+        plan = {"join": [], "attach": devs, "root": None}
+    else:
+        plan = make_plan(tree, devs)
     os.makedirs(DISKS_DIR, exist_ok=True)
     mounts = []
     if plan["join"]:
@@ -589,9 +623,7 @@ def disk_format(arg):
                 if run(["umount", m]) != 0:
                     say("cannot unmount " + m)
                     return 1
-            fstab_keep = fstab_drop(d, parts[d].get("uuid"))
-            with open("/etc/fstab", "w", encoding="utf-8") as f:
-                f.write("\n".join(fstab_keep) + "\n")
+            fstab_write(fstab_drop(d, parts[d].get("uuid")))
         if not table_join(disk, part_number(root["part"]["path"]), [part_number(d) for d in plan["join"]]):
             say("FAILED to change the partition table")
             return 1
@@ -605,7 +637,7 @@ def disk_format(arg):
             return 1
         say("OK Lucix is now %.1f GB bigger" % ((after - before) / 1e9))
     for d in plan["attach"]:
-        mnt = attach_partition(parts[d], d, pw)
+        mnt = attach_partition(parts[d], d, pw, keep)
         if not mnt:
             return 1
         mounts.append(mnt)
@@ -616,6 +648,80 @@ def disk_format(arg):
     for mnt in mounts:
         say("Steam library folder: %s/SteamLibrary (Steam > Settings > Storage > add drive)" % mnt)
     say("DONE")
+    return 0
+
+
+NAME_RE = re.compile(r"^\w[\w .-]{0,39}$")
+
+
+def valid_mount(mnt):
+    return (os.path.dirname(os.path.normpath(mnt)) == DISKS_DIR and os.path.isdir(mnt) and os.path.ismount(mnt)
+            and ".." not in mnt)
+
+
+def mount_source(mnt):
+    r = subprocess.run(["findmnt", "-no", "SOURCE,FSTYPE", mnt], capture_output=True, text=True)
+    parts = r.stdout.split()
+    return (parts[0], parts[1]) if len(parts) >= 2 else (None, None)
+
+
+def disk_rename(mnt, newname):
+    mnt = os.path.normpath(mnt)
+    newname = newname.strip()
+    if not valid_mount(mnt) or not NAME_RE.match(newname) or newname in (".", ".."):
+        say("bad name or folder")
+        return 2
+    new = os.path.join(DISKS_DIR, newname)
+    if os.path.exists(new):
+        say("a folder with this name already exists")
+        return 2
+    dev, fstype = mount_source(mnt)
+    if run(["umount", mnt]) != 0:
+        say("cannot unmount, close programs that use this disk (Steam?) and try again")
+        return 1
+    os.rename(mnt, new)
+    lines = []
+    for line in fstab_lines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and not line.lstrip().startswith("#") and parts[1] == fstab_path(mnt):
+            line = "%s %s %s" % (parts[0], fstab_path(new), parts[2])
+        lines.append(line)
+    fstab_write(lines)
+    if dev:  # метка тома тоже получает новое имя, чтобы везде было одно название
+        if fstype.startswith("ext"):
+            run(["e2label", dev, newname[:16]])
+        elif fstype == "btrfs":
+            run(["btrfs", "filesystem", "label", dev, newname])
+        elif fstype == "xfs":
+            run(["xfs_admin", "-L", newname[:12], dev])
+    run(["systemctl", "daemon-reload"])
+    if run(["mount", new]) != 0:
+        say("cannot mount " + new)
+        return 1
+    say("DONE renamed to " + newname)
+    return 0
+
+
+def fstab_lines():
+    with open("/etc/fstab", encoding="utf-8") as f:
+        return f.read().splitlines()
+
+
+def disk_detach(mnt):
+    mnt = os.path.normpath(mnt)
+    if not valid_mount(mnt):
+        say("bad folder")
+        return 2
+    if run(["umount", mnt]) != 0:
+        say("cannot unmount, close programs that use this disk (Steam?) and try again")
+        return 1
+    fstab_write([l for l in fstab_lines() if l.lstrip().startswith("#") or len(l.split()) < 2 or l.split()[1] != fstab_path(mnt)])
+    run(["systemctl", "daemon-reload"])
+    try:
+        os.rmdir(mnt)
+    except OSError:
+        pass
+    say("DONE detached, files stay on the disk")
     return 0
 
 
@@ -717,7 +823,7 @@ def main(argv):
         return 2
     snap = "--no-snapshot" not in argv
     cmd = argv[1]
-    if cmd in ("apps-install", "apt-upgrade", "drivers-install", "feature-apt", "grub-theme", "disk-format") and is_live():
+    if cmd in ("apps-install", "apt-upgrade", "drivers-install", "feature-apt", "grub-theme", "disk-format", "disk-rename", "disk-detach") and is_live():
         say("live mode: install Lucix first")
         return 2
     try:
@@ -730,7 +836,11 @@ def main(argv):
         if cmd == "feature-apt" and len(argv) >= 4 and APP_ID_RE.match(argv[3]):
             return feature_apt(argv[2], argv[3])
         if cmd == "disk-format" and len(argv) >= 4 and argv[2] == "--yes":
-            return disk_format(argv[3])
+            return disk_format(argv[3], "--keep" in argv[4:])
+        if cmd == "disk-rename" and len(argv) >= 4:
+            return disk_rename(argv[2], argv[3])
+        if cmd == "disk-detach" and len(argv) >= 3:
+            return disk_detach(argv[2])
         if cmd == "grub-theme" and len(argv) >= 3:
             return grub_theme(argv[2])
         if cmd == "apt-upgrade":
