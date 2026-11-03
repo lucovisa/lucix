@@ -59,7 +59,7 @@ TEXT = {
     "title": ("Lucix Features", "Функции Lucix"),
     "tab_features": ("Features", "Функции"),
     "tab_disks": ("Disks", "Диски"),
-    "disks_note": ("Pick volumes to erase and attach to Lucix, for example for Steam games. ALL DATA on them is erased. Volumes right after the Lucix partition are added to Lucix itself, others become a separate drive in /mnt/lucix-disks. System volumes are hidden.", "Выберите тома, которые будут стёрты и присоединены к Lucix, например для игр Steam. ВСЕ ДАННЫЕ НА НИХ БУДУТ СТЁРТЫ. Тома, которые лежат вплотную после раздела Lucix, добавляются к самому Lucix, остальные подключаются отдельным диском в /mnt/lucix-disks. Системные тома не показываются."),
+    "disks_note": ("Free memory: pick volumes to erase and attach to Lucix, for example for Steam games. ALL DATA on them is erased. Volumes right after the Lucix partition are added to Lucix itself, others become a separate drive in /freememory. System volumes are hidden.", "Свободная память: выберите тома, которые будут стёрты и присоединены к Lucix, например для игр Steam. ВСЕ ДАННЫЕ НА НИХ БУДУТ СТЁРТЫ. Тома, которые лежат вплотную после раздела Lucix, добавляются к самому Lucix, остальные подключаются отдельным диском в /freememory. Системные тома не показываются."),
     "disks_none": ("No volumes available.", "Подходящих томов нет."),
     "disks_btn": ("Format and attach", "Форматировать и присоединить"),
     "disks_refresh": ("Refresh list", "Обновить список"),

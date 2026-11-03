@@ -377,7 +377,7 @@ SAFE_PARTTYPES = {"c12a7328-f81f-11d2-ba4b-00a0c93ec93b",  # EFI
                   "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"}  # swap
 SAFE_FSTYPES = {"swap", "LVM2_member", "linux_raid_member", "zfs_member"}
 SAFE_MOUNTS = ("/", "/boot", "/home", "/usr", "/var", "/opt", "/etc", "/srv", "[SWAP]")
-DISKS_DIR = "/mnt/lucix-disks"
+DISKS_DIR = "/freememory"
 
 
 def lsblk_tree():
@@ -519,8 +519,12 @@ def grow_root_fs(root):
 
 
 def attach_partition(node, d, pw):
-    label = "lucix-" + os.path.basename(d)
-    mnt = os.path.join(DISKS_DIR, label)
+    base = os.path.basename(d)
+    label = ("freemem-" + base)[:16]
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", node.get("label") or "").strip("._-") or base
+    mnt = os.path.join(DISKS_DIR, name)
+    if os.path.ismount(mnt) or (os.path.isdir(mnt) and os.listdir(mnt)):
+        mnt = os.path.join(DISKS_DIR, name + "-" + base)
     say("=== " + d + " -> " + mnt)
     for m in node_mounts(node):
         if run(["umount", m]) != 0:
@@ -545,6 +549,10 @@ def attach_partition(node, d, pw):
         return None
     os.makedirs(os.path.join(mnt, "SteamLibrary"), exist_ok=True)
     run(["chown", "-R", "%d:%d" % (pw.pw_uid, pw.pw_gid), mnt])
+    link = os.path.join(pw.pw_dir, "freememory")  # ссылка в домашней папке, чтобы было под рукой
+    if not os.path.lexists(link):
+        os.symlink(DISKS_DIR, link)
+        os.lchown(link, pw.pw_uid, pw.pw_gid)
     say("OK " + d)
     return mnt
 
