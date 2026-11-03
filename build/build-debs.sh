@@ -1496,7 +1496,7 @@ Terminal=false
 KEYSDESKTOP
     #обязательные пакеты: keyd (клавиши), vlc (видео), python3-pil (курсоры Windows), flatpak (магазин), база Plasma,
     #значок Wi-Fi и громкость, окна выбора файлов («Обзор») в Flatpak и GTK-приложениях
-    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, flameshot, xdg-desktop-portal-kde, xdg-desktop-portal-gtk, plasma-systemmonitor, fonts-noto-color-emoji/' "$tmp/DEBIAN/control"
+    sed -i 's/^Depends: .*/&, keyd, vlc, python3-pil, flatpak, kate, konsole, dolphin, ark, plasma-nm, plasma-pa, kscreen, flameshot, xdg-desktop-portal-kde, xdg-desktop-portal-gtk, plasma-systemmonitor, fonts-noto-color-emoji, ufw, unattended-upgrades, apparmor, apparmor-utils/' "$tmp/DEBIAN/control"
     #желательные: если их нет в репозитории, обновление всё равно пройдёт
     sed -i 's/^Recommends: .*/&, ffmpegthumbnailer, gstreamer1.0-libav, alsa-utils, okular/' "$tmp/DEBIAN/control"
     grep -q '^Depends: .*keyd.*portal-gtk' "$tmp/DEBIAN/control" || { echo "не удалось дописать Depends"; exit 1; }

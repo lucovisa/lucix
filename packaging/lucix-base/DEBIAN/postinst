@@ -58,6 +58,19 @@ configure)
     done
   fi
 
+  #безопасность по умолчанию: один раз включаем, дальше выбор пользователя (переключатели в «Функциях Lucix»)
+  if [ ! -f /var/lib/lucix/security-defaults ]; then
+    mkdir -p /var/lib/lucix
+    printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\nUnattended-Upgrade::Automatic-Reboot "false";\nUnattended-Upgrade::Remove-Unused-Dependencies "false";\n' > /etc/apt/apt.conf.d/52lucix-auto-security
+    if command -v ufw >/dev/null 2>&1; then
+      ufw default deny incoming >/dev/null 2>&1 || true
+      ufw default allow outgoing >/dev/null 2>&1 || true
+      ufw --force enable >/dev/null 2>&1 || true
+    fi
+    systemctl enable apparmor >/dev/null 2>&1 || true
+    : > /var/lib/lucix/security-defaults
+  fi
+
   #кэш иконок
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true

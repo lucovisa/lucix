@@ -74,6 +74,19 @@ TEXT = {
     "confirm_detach": ("Detach %s? Files stay on the disk.", "Отключить %s? Файлы на диске останутся."),
     "copy_launch": ("Copy launch option", "Копировать параметр запуска"),
     "copied": ("Copied: %s", "Скопировано: %s"),
+    "tab_memory": ("Storage", "Память"),
+    "mem_note": ("All disks and volumes, free space, and read-only viewing of the contents. Nothing can be changed here.", "Все диски и тома, свободное место и просмотр содержимого только для чтения. Здесь ничего нельзя изменить."),
+    "mem_cols": (("Disk / volume", "Type", "Size", "Used", "Free", "Mounted at"), ("Диск / том", "Тип", "Размер", "Занято", "Свободно", "Подключён в")),
+    "mem_view": ("View contents (read-only)", "Просмотреть содержимое (только чтение)"),
+    "mem_refresh": ("Refresh", "Обновить"),
+    "mem_optimize": ("Disk optimization", "Оптимизация дисков"),
+    "mem_opt_note": ("Optimization runs TRIM on SSD and NVMe drives (like in Windows). Hard drives do not need defragmentation on Linux.", "Оптимизация запускает TRIM на SSD и NVMe (как в Windows). Жёстким дискам в Linux дефрагментация не нужна."),
+    "mem_pick": ("Select a volume first.", "Сначала выберите том."),
+    "mem_cant": ("This volume cannot be viewed (no file system or it is encrypted).", "Этот том нельзя просмотреть (нет файловой системы или он зашифрован)."),
+    "mem_mountfail": ("Could not open the volume for viewing.", "Не удалось открыть том для просмотра."),
+    "mem_browser_cols": (("Name", "Size", "Modified"), ("Имя", "Размер", "Изменён")),
+    "mem_noaccess": ("(no access)", "(нет доступа)"),
+    "mem_more": ("... and more (the list is cut)", "... и ещё (список обрезан)"),
     "vis_info_title": ("What is visual and what is not", "Что здесь визуал, а что нет"),
     "vis_info_body": (
         "VISUAL ONLY (the real thing does not change):\n"
@@ -219,6 +232,33 @@ def load_features():
             return json.load(f)["features"]
     except Exception:
         return []
+
+
+def security_state(fid):
+    if fid == "autoupdates":
+        try:
+            with open("/etc/apt/apt.conf.d/52lucix-auto-security", encoding="utf-8") as f:
+                return apt_installed(["unattended-upgrades"]) and 'Unattended-Upgrade "1"' in f.read()
+        except OSError:
+            return False
+    if fid == "apparmor":
+        r = subprocess.run(["systemctl", "is-enabled", "apparmor"], capture_output=True, text=True)
+        return apt_installed(["apparmor"]) and r.stdout.strip() == "enabled"
+    if fid == "ufw":
+        try:
+            with open("/etc/ufw/ufw.conf", encoding="utf-8") as f:
+                return apt_installed(["ufw"]) and "ENABLED=yes" in f.read()
+        except OSError:
+            return False
+    return False
+
+
+def human_size(n):
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return ("%d %s" % (n, unit)) if unit == "B" else ("%.1f %s" % (n, unit))
+        n /= 1024
 
 
 def apt_installed(pkgs):
@@ -447,6 +487,7 @@ class Updater(Gtk.Window):
         notebook.append_page(self.build_lucix_tab(), Gtk.Label(label=t("tab_lucix")))
         notebook.append_page(self.build_apps_tab(), Gtk.Label(label=t("tab_apps")))
         notebook.append_page(self.build_features_tab(), Gtk.Label(label=t("tab_features")))
+        notebook.append_page(self.build_memory_tab(), Gtk.Label(label=t("tab_memory")))
         notebook.append_page(self.build_disks_tab(), Gtk.Label(label=t("tab_disks")))
         notebook.append_page(self.build_visual_tab(), Gtk.Label(label=t("tab_visual")))
         notebook.append_page(self.build_system_tab(), Gtk.Label(label=t("tab_system")))
@@ -579,7 +620,11 @@ class Updater(Gtk.Window):
         for feat in load_features():
             row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             name = feat["name"][idx]
-            if feat["kind"] == "apt":
+            if feat["kind"] == "security":
+                on = security_state(feat["id"])
+                state = t("st_on") if on else t("st_off")
+                buttons = [(t("f_off") if on else t("f_on"), ["security", feat["id"], "off" if on else "on"], None)]
+            elif feat["kind"] == "apt":
                 state = t("st_installed") if apt_installed(feat["packages"]) else t("st_not_installed")
                 buttons = ([(t("f_remove"), ["feature-apt", "remove", feat["id"]], name)] if apt_installed(feat["packages"])
                            else [(t("f_install"), ["feature-apt", "install", feat["id"]], None)])
@@ -633,6 +678,165 @@ class Updater(Gtk.Window):
             if answer != Gtk.ResponseType.YES:
                 return
         self.run_helper(args)
+
+    #вкладка память
+    def build_memory_tab(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(8)
+        note = Gtk.Label(label=t("mem_note"), xalign=0)
+        note.set_line_wrap(True)
+        box.pack_start(note, False, False, 0)
+        # имя, тип, размер, занято (%), текст занято, свободно, подключён, устройство, подключён ли (bool)
+        self.mem_store = Gtk.TreeStore(str, str, str, int, str, str, str, str, bool)
+        view = Gtk.TreeView(model=self.mem_store)
+        self.mem_view = view
+        cols = t("mem_cols")[1 if RU else 0]
+        for i, title in enumerate(cols):
+            if title == cols[3]:
+                col = Gtk.TreeViewColumn(title, Gtk.CellRendererProgress(), value=3, text=4)
+            else:
+                idx = {0: 0, 1: 1, 2: 2, 4: 5, 5: 6}[i]
+                col = Gtk.TreeViewColumn(title, Gtk.CellRendererText(), text=idx)
+            col.set_resizable(True)
+            view.append_column(col)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(220)
+        scroll.add(view)
+        box.pack_start(scroll, True, True, 0)
+        bar = Gtk.Box(spacing=6)
+        refresh = Gtk.Button(label=t("mem_refresh"))
+        refresh.connect("clicked", lambda *_: self.refresh_memory())
+        look = Gtk.Button(label=t("mem_view"))
+        look.connect("clicked", self.view_volume)
+        self.opt_btn = Gtk.Button(label=t("mem_optimize"))
+        self.opt_btn.connect("clicked", lambda *_: self.run_helper(["optimize-disks"]))
+        for w in (refresh, look, self.opt_btn):
+            bar.pack_start(w, False, False, 0)
+        self.busy_widgets += [refresh, look, self.opt_btn]
+        if IS_LIVE:
+            self.live_locked.append(self.opt_btn)
+            self.opt_btn.set_sensitive(False)
+        box.pack_start(bar, False, False, 0)
+        opt = Gtk.Label(label=t("mem_opt_note"), xalign=0)
+        opt.set_line_wrap(True)
+        box.pack_start(opt, False, False, 0)
+        self.refresh_memory()
+        return box
+
+    def refresh_memory(self):
+        self.mem_store.clear()
+        if H is None:
+            return
+        try:
+            tree = H.lsblk_tree()
+        except Exception:
+            return
+
+        def add(parent, node):
+            kind = node.get("type")
+            if kind in ("loop", "rom"):
+                return
+            size = H.to_int(node.get("size"))
+            mounts = [m for m in (node.get("mountpoints") or []) if m]
+            mnt = mounts[0] if mounts else ""
+            used_pct, used_txt, free_txt = 0, "", ""
+            if mnt and mnt.startswith("/"):
+                try:
+                    u = shutil.disk_usage(mnt)
+                    used_pct = int(u.used * 100 / u.total) if u.total else 0
+                    used_txt = "%s (%d%%)" % (human_size(u.used), used_pct)
+                    free_txt = human_size(u.free)
+                except OSError:
+                    pass
+            if kind == "disk":
+                name = "%s  %s" % (node.get("path"), node.get("model") or "")
+                info = "disk"
+            else:
+                name = "%s  %s" % (node.get("path") or node.get("name"), node.get("label") or "")
+                info = node.get("fstype") or kind or ""
+            row = self.mem_store.append(parent, [name.strip(), info, human_size(size), used_pct, used_txt, free_txt,
+                                                  mnt, node.get("path") or "", bool(mnt)])
+            for child in node.get("children") or []:
+                add(row, child)
+
+        for disk in tree:
+            add(None, disk)
+        self.mem_view.expand_all()
+
+    def helper_sync(self, args):
+        p = subprocess.run(["pkexec", HELPER] + args, capture_output=True, text=True)
+        return p.returncode, p.stdout
+
+    def view_volume(self, *_):
+        model, it = self.mem_view.get_selection().get_selected()
+        if it is None:
+            self.append_log(t("mem_pick"))
+            return
+        dev, mnt, mounted, info = model[it][7], model[it][6], model[it][8], model[it][1]
+        mounted_here = False
+        if not mounted or not mnt.startswith("/"):
+            if info in ("disk", "", "crypto_LUKS", "BitLocker", "swap") or not dev:
+                self.append_log(t("mem_cant"))
+                return
+            rc, out = self.helper_sync(["disk-view-mount", dev])
+            line = [l for l in out.splitlines() if l.startswith("MOUNT ")]
+            if rc != 0 or not line:
+                self.append_log(t("mem_mountfail"))
+                return
+            mnt = line[0][6:]
+            mounted_here = True
+        self.show_browser(mnt, model[it][0])
+        if mounted_here:
+            self.helper_sync(["disk-view-umount", dev])
+
+    def show_browser(self, root, title):
+        """проводник только для чтения: можно раскрывать папки и смотреть, больше ничего"""
+        dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dialog.set_default_size(720, 520)
+        store = Gtk.TreeStore(str, str, str, str)  # имя, размер, дата, путь
+        view = Gtk.TreeView(model=store)
+        for i, name in enumerate(t("mem_browser_cols")[1 if RU else 0]):
+            col = Gtk.TreeViewColumn(name, Gtk.CellRendererText(), text=i)
+            col.set_resizable(True)
+            view.append_column(col)
+
+        def fill(parent, path):
+            try:
+                entries = sorted(os.scandir(path), key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()))
+            except OSError:
+                store.append(parent, [t("mem_noaccess"), "", "", ""])
+                return
+            for count, e in enumerate(entries):
+                if count >= 5000:
+                    store.append(parent, [t("mem_more"), "", "", ""])
+                    break
+                try:
+                    st = e.stat(follow_symlinks=False)
+                    isdir = e.is_dir(follow_symlinks=False)
+                    size = "" if isdir else human_size(st.st_size)
+                    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+                except OSError:
+                    isdir, size, when = False, "", ""
+                row = store.append(parent, [e.name, size, when, e.path])
+                if isdir:
+                    store.append(row, ["", "", "", ""])  # заглушка: раскроется при открытии
+
+        def expanded(_view, it, _path):
+            first = store.iter_children(it)
+            if first is not None and store[first][3] == "" and store[first][0] == "":
+                store.remove(first)
+                fill(it, store[it][3])
+
+        view.connect("row-expanded", expanded)
+        fill(None, root)
+        scroll = Gtk.ScrolledWindow()
+        scroll.add(view)
+        area = dialog.get_content_area()
+        area.pack_start(scroll, True, True, 0)
+        dialog.add_button("Close" if not RU else "Закрыть", Gtk.ResponseType.CLOSE)
+        dialog.show_all()
+        dialog.run()
+        dialog.destroy()
 
     #вкладка диски
     def build_disks_tab(self):
@@ -1144,8 +1348,10 @@ class Updater(Gtk.Window):
             self.load_drivers()
         if args[0] == "apps-install":
             self.refresh_apps()
-        if args[0] in ("feature-apt", "grub-theme"):
+        if args[0] in ("feature-apt", "grub-theme", "security"):
             self.refresh_features()
+        if args[0] == "optimize-disks":
+            self.refresh_memory()
         if args[0] == "disk-format":
             self.refresh_disks()
 

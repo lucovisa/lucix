@@ -59,6 +59,42 @@
         "Boot menu theme. Can be turned off, removed or downloaded again",
         "Оформление меню загрузки. Можно отключить, удалить и скачать заново"
       ]
+    },
+    {
+      "id": "autoupdates",
+      "kind": "security",
+      "name": [
+        "Automatic security updates",
+        "Автообновления безопасности"
+      ],
+      "desc": [
+        "Installs Ubuntu security fixes by itself (signed packages from Ubuntu only, no automatic reboot, Lucix packages from GitHub are not touched)",
+        "Сама ставит заплатки безопасности Ubuntu (только подписанные пакеты Ubuntu, без автоперезагрузки, пакеты Lucix с GitHub не трогает)"
+      ]
+    },
+    {
+      "id": "apparmor",
+      "kind": "security",
+      "name": [
+        "AppArmor",
+        "AppArmor"
+      ],
+      "desc": [
+        "Limits what programs may do on your system, even if they are hacked. May need a reboot",
+        "Ограничивает, что программы могут делать в системе, даже если их взломали. Может потребоваться перезагрузка"
+      ]
+    },
+    {
+      "id": "ufw",
+      "kind": "security",
+      "name": [
+        "Firewall (UFW)",
+        "Брандмауэр (UFW)"
+      ],
+      "desc": [
+        "Blocks all incoming connections. May block KDE Connect and local game servers",
+        "Закрывает все входящие соединения. Может мешать KDE Connect и локальным игровым серверам"
+      ]
     }
   ]
 }

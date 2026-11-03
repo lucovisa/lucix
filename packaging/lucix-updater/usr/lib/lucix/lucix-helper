@@ -725,6 +725,108 @@ def disk_detach(mnt):
     return 0
 
 
+#безопасность
+AUTO_CONF = "/etc/apt/apt.conf.d/52lucix-auto-security"
+
+
+def write_auto(enabled):
+    flag = "1" if enabled else "0"
+    write_text(AUTO_CONF, 'APT::Periodic::Update-Package-Lists "%s";\nAPT::Periodic::Unattended-Upgrade "%s";\n'
+               'Unattended-Upgrade::Automatic-Reboot "false";\nUnattended-Upgrade::Remove-Unused-Dependencies "false";\n'
+               % (flag, flag))
+
+
+def security(fid, action):
+    if fid not in ("autoupdates", "apparmor", "ufw") or action not in ("on", "off"):
+        say("unknown option")
+        return 2
+    on = action == "on"
+    if on and run(["apt-get", "update"]) != 0:
+        return 1
+    if fid == "autoupdates":
+        if on and not apt_install(["unattended-upgrades"]):
+            return 1
+        write_auto(on)
+        return 0
+    if fid == "apparmor":
+        if on:
+            if not apt_install(["apparmor", "apparmor-utils"]):
+                return 1
+            run(["systemctl", "enable", "--now", "apparmor"])
+        else:
+            run(["systemctl", "disable", "--now", "apparmor"])
+        return 0
+    if on:
+        if not shutil.which("ufw") and not apt_install(["ufw"]):
+            return 1
+        run(["ufw", "default", "deny", "incoming"])
+        run(["ufw", "default", "allow", "outgoing"])
+        return 0 if run(["ufw", "--force", "enable"]) == 0 else 1
+    return 0 if run(["ufw", "--force", "disable"]) == 0 else 1
+
+
+#просмотр томов только для чтения и оптимизация
+VIEW_DIR = "/run/lucix-view"
+
+
+def optimize_disks():
+    """как «оптимизация дисков» в Windows: TRIM для SSD и NVMe"""
+    rc = run(["fstrim", "-av"])
+    return 0 if rc in (0, 64) else 1
+
+
+def disk_view_mount(dev):
+    if not DEV_RE.match(dev):
+        say("bad device")
+        return 2
+    parts = list_parts(lsblk_tree())
+    node = parts.get(dev)
+    if not node or not node.get("fstype") or node_mounts(node):
+        say("cannot mount this volume for viewing")
+        return 2
+    try:
+        uid = int(os.environ.get("PKEXEC_UID", ""))
+        pw = pwd.getpwuid(uid)
+    except Exception:
+        say("cannot find the user")
+        return 2
+    mnt = os.path.join(VIEW_DIR, os.path.basename(dev))
+    os.makedirs(mnt, exist_ok=True)
+    fs = node["fstype"]
+    opts = "ro,nosuid,nodev,noexec"
+    if fs in ("ext4", "ext3"):
+        opts += ",noload"
+    elif fs == "xfs":
+        opts += ",norecovery"
+    elif fs == "ntfs":
+        fs, opts = "ntfs3", opts + ",uid=%d,gid=%d" % (pw.pw_uid, pw.pw_gid)
+    elif fs in ("vfat", "exfat"):
+        opts += ",uid=%d,gid=%d" % (pw.pw_uid, pw.pw_gid)
+    elif fs not in ("btrfs", "f2fs", "iso9660", "udf"):
+        say("file system %s is not supported for viewing" % fs)
+        return 2
+    if run(["mount", "-o", opts, "-t", fs, dev, mnt]) != 0:
+        say("cannot mount")
+        return 1
+    print("MOUNT " + mnt, flush=True)
+    return 0
+
+
+def disk_view_umount(dev):
+    if not DEV_RE.match(dev):
+        say("bad device")
+        return 2
+    mnt = os.path.join(VIEW_DIR, os.path.basename(dev))
+    if os.path.ismount(mnt):
+        if run(["umount", mnt]) != 0:
+            return 1
+    try:
+        os.rmdir(mnt)
+    except OSError:
+        pass
+    return 0
+
+
 #обновление lucix из релиза
 def lucix_update(tag, snap):
     if not TAG_RE.match(tag):
@@ -823,7 +925,7 @@ def main(argv):
         return 2
     snap = "--no-snapshot" not in argv
     cmd = argv[1]
-    if cmd in ("apps-install", "apt-upgrade", "drivers-install", "feature-apt", "grub-theme", "disk-format", "disk-rename", "disk-detach") and is_live():
+    if cmd in ("apps-install", "apt-upgrade", "drivers-install", "feature-apt", "grub-theme", "disk-format", "disk-rename", "disk-detach", "security", "optimize-disks") and is_live():
         say("live mode: install Lucix first")
         return 2
     try:
@@ -837,6 +939,14 @@ def main(argv):
             return feature_apt(argv[2], argv[3])
         if cmd == "disk-format" and len(argv) >= 4 and argv[2] == "--yes":
             return disk_format(argv[3], "--keep" in argv[4:])
+        if cmd == "security" and len(argv) >= 4:
+            return security(argv[2], argv[3])
+        if cmd == "optimize-disks":
+            return optimize_disks()
+        if cmd == "disk-view-mount" and len(argv) >= 3:
+            return disk_view_mount(argv[2])
+        if cmd == "disk-view-umount" and len(argv) >= 3:
+            return disk_view_umount(argv[2])
         if cmd == "disk-rename" and len(argv) >= 4:
             return disk_rename(argv[2], argv[3])
         if cmd == "disk-detach" and len(argv) >= 3:
