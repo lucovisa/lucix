@@ -1,0 +1,4 @@
+# Lucix: без snap, приложения ставим из Flatpak
+Package: snapd
+Pin: release a=*
+Pin-Priority: -10

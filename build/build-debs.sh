@@ -1052,6 +1052,8 @@ def cursor():
     except OSError as e:
         log("env: %r" % (e,))
     if shutil.which("flatpak"):
+        #Electron-приложения (Discord) берут курсор из настроек GTK: открываем их в песочнице только для чтения
+        run("flatpak", "override", "--user", "--filesystem=xdg-config/gtk-3.0:ro", "--filesystem=xdg-config/gtk-4.0:ro")
         run("flatpak", "override", "--user", "--filesystem=xdg-data/icons:ro", "--env=XCURSOR_THEME=" + theme,
             "--env=XCURSOR_SIZE=" + CURSOR_SIZE)
     if shutil.which("gsettings"):
@@ -1263,7 +1265,7 @@ STEPS = (
     ("lockwall", 1, lockwall),
     ("kwin", 1, kwin),
     ("sounds", 1, sounds),
-    ("cursor", 4, cursor),
+    ("cursor", 5, cursor),
     ("trash", 3, trash),
     ("privacy", 2, privacy),
     ("memory", 1, memory),

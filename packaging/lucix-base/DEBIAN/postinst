@@ -56,7 +56,6 @@ configure)
     printf '[Icon Theme]\nName=Default\nInherits=Lucix-Cursor\n' > /usr/share/icons/default/index.theme
     mkdir -p /etc/xdg
     printf '[Mouse]\ncursorTheme=Lucix-Cursor\ncursorSize=24\n' > /etc/xdg/kcminputrc
-    printf '[Theme]\nCursorTheme=Lucix-Cursor\nCursorSize=24\n' > /etc/sddm.conf.d/10-lucix-cursor.conf
     for g in gtk-3.0 gtk-4.0; do
       printf '[Settings]\ngtk-cursor-theme-name=Lucix-Cursor\ngtk-cursor-theme-size=24\n' > /etc/$g/settings.ini
     done
@@ -73,6 +72,20 @@ configure)
     fi
     systemctl enable apparmor >/dev/null 2>&1 || true
     : > /var/lib/lucix/security-defaults
+  fi
+
+  #экран входа: обои Lucix вместо стандартных (тема breeze читает theme.conf.user)
+  if [ -d /usr/share/sddm/themes/breeze ] && [ -f /usr/share/backgrounds/lucix/lucix.jpg ]; then
+    mkdir -p /etc/sddm.conf.d
+    rm -f /etc/sddm.conf.d/10-lucix-cursor.conf /etc/sddm.conf.d/11-lucix-theme.conf
+    #имя начинается с zz, чтобы наши настройки читались последними и не перебивались чужими (например kde_settings.conf)
+    printf '[Theme]\nCurrent=breeze\nCursorTheme=Lucix-Cursor\nCursorSize=24\n' > /etc/sddm.conf.d/zz-lucix.conf
+    #если есть общий файл /etc/sddm.conf, правим и его
+    if [ -f /etc/sddm.conf ] && command -v kwriteconfig6 >/dev/null 2>&1; then
+      kwriteconfig6 --file /etc/sddm.conf --group Theme --key Current breeze || true
+      kwriteconfig6 --file /etc/sddm.conf --group Theme --key CursorTheme Lucix-Cursor || true
+    fi
+    printf '[General]\ntype=image\nbackground=/usr/share/backgrounds/lucix/lucix.jpg\n' > /usr/share/sddm/themes/breeze/theme.conf.user
   fi
 
   #кэш иконок
