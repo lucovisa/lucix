@@ -1329,6 +1329,8 @@ import sys
 
 CONF = os.environ.get("LUCIX_KEYD_CONF", "/etc/keyd/default.conf")
 NAME = re.compile(r"^[a-z0-9_+]{1,40}$")
+#что клавиша может делать: другая клавиша, сочетание (C-A-t) или набор текста macro(h i). Запуск команд от root НЕ разрешаем
+DST = re.compile(r"^([a-zA-Z0-9_+\-]{1,40}|macro\([a-z0-9 ]{1,80}\))$")
 HEAD = ("# Lucix: переназначение клавиш (keyd).\n"
         "# Удобнее менять через «Переназначение клавиш» в меню. Вручную: sudo keyd reload после правки.\n"
         "[ids]\n*\n\n[main]\n")
@@ -1379,7 +1381,7 @@ def main(argv):
         write_map({})
         return 0
     if cmd == "set" and len(argv) == 4:
-        if not (NAME.match(argv[2]) and NAME.match(argv[3])):
+        if not (NAME.match(argv[2]) and DST.match(argv[3])):
             print("недопустимое имя клавиши")
             return 2
         m = read_map()
@@ -1429,6 +1431,24 @@ def ask(text):
     return r.stdout.strip().lower() if r.returncode == 0 else ""
 
 
+def ask_raw(text):
+    r = zen("--entry", "--text=" + text)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def make_macro(text):
+    """слово латиницей -> macro(h e l l o); пробел это space"""
+    keys = []
+    for ch in text.lower():
+        if ch == " ":
+            keys.append("space")
+        elif ch.isascii() and ch.isalnum():
+            keys.append(ch)
+        else:
+            return ""
+    return "macro(%s)" % " ".join(keys) if keys else ""
+
+
 def main():
     if not shutil.which("zenity"):
         print("нужен zenity")
@@ -1448,6 +1468,7 @@ def main():
             "TRUE", "Правый Alt работает как Esc", "rightalt-esc",
             "FALSE", "Caps Lock работает как Esc", "caps-esc",
             "FALSE", "Своё переназначение", "custom",
+            "FALSE", "Несколько клавиш сразу: открыть консоль, написать слово и т.п.", "chord",
             "FALSE", "Убрать одно переназначение", "remove",
             "FALSE", "Сбросить все переназначения", "reset",
             "FALSE", "Открыть файл настроек вручную", "edit")
@@ -1465,6 +1486,30 @@ def main():
         if not (src and dst):
             return 0
         ok = apply("set", src, dst) == 0
+    elif choice == "chord":
+        keys = ask("Какие клавиши нажимать ОДНОВРЕМЕННО? Через плюс, английскими буквами, например: z+x+c\n"
+                   "(русские буквы вводите по английским клавишам на тех же местах)")
+        if keys.count("+") < 1 or not keys.replace("+", "").isalnum():
+            zen("--error", "--text=Нужно минимум две клавиши через плюс, например z+x+c")
+            return 0
+        a = zen("--list", "--radiolist", "--height=300", "--text=Что должно произойти?",
+                "--column=", "--column=Действие", "--column=id", "--hide-column=3", "--print-column=3",
+                "TRUE", "Открыть консоль (Ctrl+Alt+T)", "console",
+                "FALSE", "Напечатать слово или фразу (латиницей)", "text",
+                "FALSE", "Нажать другое сочетание (например C-A-t = Ctrl+Alt+T)", "combo")
+        if a.returncode != 0:
+            return 0
+        kind = a.stdout.strip()
+        if kind == "console":
+            dst = "C-A-t"
+        elif kind == "text":
+            dst = make_macro(ask_raw("Что напечатать? Только английские буквы, цифры и пробелы"))
+        else:
+            dst = ask_raw("Сочетание в формате keyd: C- Ctrl, A- Alt, S- Shift, M- Meta. Например: C-A-t")
+        if not dst:
+            zen("--error", "--text=Не получилось: используйте английские буквы и цифры")
+            return 0
+        ok = apply("set", keys, dst) == 0
     elif choice == "remove":
         src = ask("Какое переназначение убрать? Название клавиши, например: rightalt")
         if not src:

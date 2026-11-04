@@ -52,7 +52,7 @@ configure)
 
   #курсор Lucix как системный: по умолчанию для всех программ, экрана входа и GTK
   if [ -d /usr/share/icons/Lucix-Cursor ]; then
-    mkdir -p /usr/share/icons/default /etc/sddm.conf.d /etc/gtk-3.0 /etc/gtk-4.0
+    mkdir -p /usr/share/icons/default /etc/gtk-3.0 /etc/gtk-4.0
     printf '[Icon Theme]\nName=Default\nInherits=Lucix-Cursor\n' > /usr/share/icons/default/index.theme
     mkdir -p /etc/xdg
     printf '[Mouse]\ncursorTheme=Lucix-Cursor\ncursorSize=24\n' > /etc/xdg/kcminputrc
@@ -74,18 +74,18 @@ configure)
     : > /var/lib/lucix/security-defaults
   fi
 
-  #экран входа: обои Lucix вместо стандартных (тема breeze читает theme.conf.user)
-  if [ -d /usr/share/sddm/themes/breeze ] && [ -f /usr/share/backgrounds/lucix/lucix.jpg ]; then
-    mkdir -p /etc/sddm.conf.d
-    rm -f /etc/sddm.conf.d/10-lucix-cursor.conf /etc/sddm.conf.d/11-lucix-theme.conf
-    #имя начинается с zz, чтобы наши настройки читались последними и не перебивались чужими (например kde_settings.conf)
-    printf '[Theme]\nCurrent=breeze\nCursorTheme=Lucix-Cursor\nCursorSize=24\n' > /etc/sddm.conf.d/zz-lucix.conf
-    #если есть общий файл /etc/sddm.conf, правим и его
-    if [ -f /etc/sddm.conf ] && command -v kwriteconfig6 >/dev/null 2>&1; then
-      kwriteconfig6 --file /etc/sddm.conf --group Theme --key Current breeze || true
-      kwriteconfig6 --file /etc/sddm.conf --group Theme --key CursorTheme Lucix-Cursor || true
+  #экран входа (у нас LightDM с lightdm-gtk-greeter): обои и курсор Lucix вместо Debian-оформления из desktop-base
+  rm -f /etc/sddm.conf.d/10-lucix-cursor.conf /etc/sddm.conf.d/11-lucix-theme.conf /etc/sddm.conf.d/zz-lucix.conf
+  if [ -d /etc/lightdm ] && [ -f /usr/share/backgrounds/lucix/lucix.jpg ]; then
+    mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
+    printf '[greeter]\nbackground=/usr/share/backgrounds/lucix/lucix.jpg\nuser-background=false\ncursor-theme-name=Lucix-Cursor\ncursor-theme-size=24\n' > /etc/lightdm/lightdm-gtk-greeter.conf.d/99-lucix.conf
+    #на случай, если greeter читает только общий файл или он перебивает conf.d
+    if [ -f /etc/lightdm/lightdm-gtk-greeter.conf ] && command -v kwriteconfig6 >/dev/null 2>&1; then
+      kwriteconfig6 --file /etc/lightdm/lightdm-gtk-greeter.conf --group greeter --key background /usr/share/backgrounds/lucix/lucix.jpg || true
+      kwriteconfig6 --file /etc/lightdm/lightdm-gtk-greeter.conf --group greeter --key user-background false || true
+      kwriteconfig6 --file /etc/lightdm/lightdm-gtk-greeter.conf --group greeter --key cursor-theme-name Lucix-Cursor || true
+      kwriteconfig6 --file /etc/lightdm/lightdm-gtk-greeter.conf --group greeter --key cursor-theme-size 24 || true
     fi
-    printf '[General]\ntype=image\nbackground=/usr/share/backgrounds/lucix/lucix.jpg\n' > /usr/share/sddm/themes/breeze/theme.conf.user
   fi
 
   #кэш иконок
